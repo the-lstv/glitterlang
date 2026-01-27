@@ -75,6 +75,8 @@ const lang = {
     // We use indexOf for comments because it's much faster
     SLCommentEnd: "\n",
     // MLCommentEnd: "*/",
+
+    SLCommentEndCharCode: 10, // \n
     
     // But for multiline comments we have to keep line and column count, so no optimization :(
     isMLCommentEnd(char1, char2) {
@@ -205,6 +207,7 @@ const lang = {
     TOKEN_OPENING_BRACE: "opening_brace",
     TOKEN_CLOSING_BRACE: "closing_brace",
     TOKEN_SEMICOLON: "semicolon",
+    TOKEN_NL: "newline",
     // TOKEN_IDENTIFIER: 0,
     // TOKEN_NUMBER: 1,
     // TOKEN_STRING: 2,
@@ -249,8 +252,8 @@ lang.OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
  */
 class Token {
     constructor(type, value, start, end) {
-        this.type = type;
-        this.value = value;
+        this.type = type.toString();
+        this.value = value.toString();
         this.start = start;
         this.end = end;
     }
@@ -259,6 +262,39 @@ class Token {
         if(this.type !== type) return false;
         if(value !== null && this.value !== value) return false;
         return true;
+    }
+}
+
+/**helper*/ class StringView {
+    isView = true;
+
+    constructor(buffer) {
+        this.u8 = (buffer instanceof Uint8Array) ? buffer : new Uint8Array(buffer);
+    }
+
+    charCodeAt(index) {
+        return this.u8[index];
+    }
+
+    get length() {
+        return this.u8.length;
+    }
+
+    substring(start, end) {
+        return new StringView(this.u8.subarray(start, end));
+    }
+
+    toString() {
+        return new TextDecoder().decode(this.u8);
+    }
+
+    indexOf(searchValue, fromIndex = 0) {
+        return this.u8.indexOf(searchValue, fromIndex);
+    }
+
+    static fromString(str) {
+        const encoder = new TextEncoder();
+        return new StringView(encoder.encode(str));
     }
 }
 
@@ -316,7 +352,7 @@ class State {
     }
 
     _cutValue(value, maxLength = 20) {
-        if (value.length > maxLength) {
+        if (value && value.length > maxLength) {
             return value.substring(0, maxLength - 3) + "...";
         }
         return value;
@@ -335,6 +371,7 @@ class LexerState extends State {
         this.line = 1;
         this.column = 1;
         this.source = source;
+        this.sourceView = typeof source === "string"? source: new StringView(source);
         this.inString = false;
         this.inTemplateString = false;
         this.stringDelimiter = null;
@@ -347,7 +384,7 @@ class LexerState extends State {
     }
 
     isEnd() {
-        return this.position >= this.source.length - 1;
+        return this.position >= this.sourceView.length - 1;
     }
 
     push(token) {
@@ -382,7 +419,7 @@ class LexerState extends State {
     }
 
     get_value(offset = 0) {
-        return this.source.substring(this.valueStart, this.position + offset);
+        return this.sourceView.substring(this.valueStart, this.position + offset);
     }
 
     start_string(delim) {
@@ -402,13 +439,17 @@ function continueLexing(state) {
         throw new Error("Invalid LexerState provided to continueLexing");
     }
 
-    for(; state.position < state.source.length; state.position++) {
+    for(; state.position < state.sourceView.length; state.position++) {
         const isEnd = state.isEnd();
-        let char = state.source.charCodeAt(state.position);
+        let char = state.sourceView.charCodeAt(state.position);
 
         if(char === 10) {
             state.line++;
             state.column = 1;
+
+            if(!state.inString && state.tokens.length > 0 && state.tokens[state.tokens.length - 1].type !== lang.TOKEN_NL) {
+                state.push(new Token(lang.TOKEN_NL, null, state.position, state.position + 1));
+            }
 
             // Line range filtering
             if(state.options.fromLine && state.line < state.options.fromLine) continue;
@@ -449,14 +490,14 @@ function continueLexing(state) {
             }
 
             // Single-line comments
-            if(lang.isSLCommentStart(char, state.source.charCodeAt(state.position + 1))) {
-                let endIdx = state.source.indexOf(lang.SLCommentEnd, state.position + 2);
+            if(lang.isSLCommentStart(char, state.sourceView.charCodeAt(state.position + 1))) {
+                let endIdx = state.sourceView.indexOf(state.sourceView.isView? lang.SLCommentEndCharCode: lang.SLCommentEnd, state.position + 2);
                 if(endIdx === -1) {
-                    endIdx = state.source.length;
+                    endIdx = state.sourceView.length;
                 }
 
                 if(state.options.keepComments) {
-                    let comment = state.source.substring(state.position, endIdx);
+                    let comment = state.sourceView.substring(state.position, endIdx);
                     state.push(new Token(lang.TOKEN_COMMENT, comment, state.position, endIdx));
                 }
 
@@ -465,14 +506,14 @@ function continueLexing(state) {
             }
 
             // Multi-line comments
-            if(lang.isMLCommentStart(char, state.source.charCodeAt(state.position + 1))) {
+            if(lang.isMLCommentStart(char, state.sourceView.charCodeAt(state.position + 1))) {
                 const ogPosition = state.position;
 
                 let idx = state.position + 2;
                 let endFound = false;
-                while(idx < state.source.length) {
-                    let c1 = state.source.charCodeAt(idx);
-                    let c2 = state.source.charCodeAt(idx + 1);
+                while(idx < state.sourceView.length) {
+                    let c1 = state.sourceView.charCodeAt(idx);
+                    let c2 = state.sourceView.charCodeAt(idx + 1);
                     if(lang.isMLCommentEnd(c1, c2)) {
                         endFound = true;
                         break;
@@ -493,7 +534,7 @@ function continueLexing(state) {
                 state.position = idx + 1;
 
                 if(state.options.keepComments) {
-                    let comment = state.source.substring(state.position + 2, idx);
+                    let comment = state.sourceView.substring(state.position + 2, idx);
                     state.push(new Token(lang.TOKEN_COMMENT, comment, ogPosition));
                 }
                 continue;
@@ -525,7 +566,7 @@ function continueLexing(state) {
 
             // Number starting with dot
             if(char === 46) { // .
-                let nextChar = state.source.charCodeAt(state.position + 1);
+                let nextChar = state.sourceView.charCodeAt(state.position + 1);
                 if(lang.isDigit(nextChar)) {
                     state.dotSeen = true;
                     state.set_state(lang.STATE_NUMBER);
@@ -556,13 +597,13 @@ function continueLexing(state) {
             if(lang.OPCHARS.has(char)) {
                 let startPos = state.position;
                 let opStr = String.fromCharCode(char);
-                let nextChar = state.source.charCodeAt(state.position + 1);
+                let nextChar = state.sourceView.charCodeAt(state.position + 1);
                 while(!isEnd) {
                     let potentialOp = opStr + String.fromCharCode(nextChar);
                     if(lang.operators.has(potentialOp)) {
                         opStr = potentialOp;
                         state.position++;
-                        nextChar = state.source.charCodeAt(state.position + 1);
+                        nextChar = state.sourceView.charCodeAt(state.position + 1);
                     } else {
                         break;
                     }
@@ -606,10 +647,10 @@ function continueLexing(state) {
         if(state.code === lang.STATE_NUMBER) {
             if(char === 120 || char === 88) { // x or X
                 // Hexadecimal
-                if(state.position === state.valueStart + 1 && state.source.charCodeAt(state.valueStart) === 48) {
+                if(state.position === state.valueStart + 1 && state.sourceView.charCodeAt(state.valueStart) === 48) {
                     state.position++;
                     while(!state.isEnd()) {
-                        char = state.source.charCodeAt(state.position);
+                        char = state.sourceView.charCodeAt(state.position);
                         if(!lang.isHexDigit(char)) {
                             break;
                         }
@@ -705,6 +746,10 @@ class ParserState extends State {
 
         if(token.type === lang.TOKEN_SEMICOLON || token.type === lang.TOKEN_OPENING_BRACE || token.type === lang.TOKEN_CLOSING_BRACE) {
             return "'" + token.value + "'";
+        }
+
+        if(token.type === lang.TOKEN_NL) {
+            return "newline";
         }
 
         if(token.type === lang.TOKEN_OPERATOR) {
