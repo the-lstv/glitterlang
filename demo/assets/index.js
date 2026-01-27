@@ -382,11 +382,11 @@ print("Hello, World!");`;
 
     help: [
         { text: "Report bug", action() {
-            window.open("https://github.com/the-lstv/glitter/issues?q=state%3Aopen%20label%3Abug");
+            window.open("https://github.com/the-lstv/glitterlang/issues?q=state%3Aopen%20label%3Abug");
         } },
 
         { text: "Request feature", action() {
-            window.open("https://github.com/the-lstv/glitter/issues?q=state%3Aopen%20label%3Aenhancement");
+            window.open("https://github.com/the-lstv/glitterlang/issues?q=state%3Aopen%20label%3Aenhancement");
         } },
 
         { type: "separator" },
@@ -394,11 +394,11 @@ print("Hello, World!");`;
         { text: "About", icon: "bi-stars", action() {
             LS.Modal.buildEphemeral({
                 content: [
-                    { tag: 'img', src: '/~/icon.svg', style: 'height: 4em; width: 100%; margin: auto' },
+                    { tag: 'img', src: '/~/icon.svg', style: 'height: 4em; width: 100%; margin: auto;object-fit: contain' },
                     { tag: 'h2', inner: 'Glitter Language Demo', style: 'text-align: center; margin-bottom: 8px' },
                     { tag: 'p', inner: `Version 0.1 (Alpha)` },
                     { tag: 'p', inner: ['Created with love and hard work by Lukas (', { tag: 'a', href: 'https://lstv.space', target: '_blank', inner: 'https://lstv.space' }, ')'] },
-                    { tag: 'p', inner: ['Source code available on ', { tag: 'a', href: 'https://github.com/the-lstv/glitter', target: '_blank', inner: 'GitHub' }] },
+                    { tag: 'p', inner: ['Source code available on ', { tag: 'a', href: 'https://github.com/the-lstv/glitterlang', target: '_blank', inner: 'GitHub' }] },
                 ],
                 buttons: [ { label: "Close" } ]
             });
