@@ -1,0 +1,1135 @@
+/**
+ * Experimental Glitter compiler implementation in vanilla JavaScript (as a proof of concept)
+ * Later to be properly rewritten in C++
+ * 
+ * Pipeline: Tokenization (lexer) -> Parsing -> AST Transformations (optional transformers) -> Code Generation (compiler)
+ * 
+ * Glitter is a target-agnostic programming language, meaning it can be compiled to multiple backends and how it compiles can be heavily customized.
+ * Included is a JavaScript backend as a demonstration.
+ * 
+ * Copyright (c) 2026 lstv.space
+ */
+
+/**
+ * Language definitions and helpers
+ */
+const lang = {
+    // --- Checks for the tokenizer ---
+
+    isStringDelimiter(char) {
+        return char === 34 || char === 39 || char === 96; // " ' `
+    },
+
+    isWhitespace(char) {
+        return char === 32 || char === 9 || char === 10 || char === 13; // space, tab, LF, CR
+    },
+
+    isIdentStart(char) {
+        // $ or _
+        if (char === 36 || char === 95) return true;
+
+        // A-Z a-z
+        if ((char >= 65 && char <= 90) || (char >= 97 && char <= 122)) return true;
+
+        // Non-ASCII: Unicode ID_Start
+        if (char <= 0x7F) return false;
+        return // TODO: Implement Unicode ID_Start check
+            false;
+    },
+
+    isIdentPart(char) {
+        // $ or _
+        if (char === 36 || char === 95) return true;
+
+        // 0-9 A-Z a-z
+        if ((char >= 48 && char <= 57) ||
+            (char >= 65 && char <= 90) ||
+            (char >= 97 && char <= 122)) return true;
+
+        // ZWNJ / ZWJ allowed in identifier parts in ECMAScript
+        if (char === 0x200C || char === 0x200D) return true;
+
+        if (char <= 0x7F) return false;
+        return // TODO: Implement Unicode ID_Continue check
+            false;
+    },
+
+    isDigit(char) {
+        return char >= 48 && char <= 57; // 0-9
+    },
+
+    isHexDigit(char) {
+        return (char >= 48 && char <= 57) || // 0-9
+               (char >= 65 && char <= 70) || // A-F
+               (char >= 97 && char <= 102);  // a-f
+    },
+
+    isSLCommentStart(char1, char2) {
+        return (char1 === 47 && char2 === 47) || char1 === 35; // // or #
+    },
+
+    isMLCommentStart(char1, char2) {
+        return char1 === 47 && char2 === 42; // /*
+    },
+
+    // We use indexOf for comments because it's much faster
+    SLCommentEnd: "\n",
+    // MLCommentEnd: "*/",
+    
+    // But for multiline comments we have to keep line and column count, so no optimization :(
+    isMLCommentEnd(char1, char2) {
+        return char1 === 42 && char2 === 47; // */
+    },
+
+
+    // --- Language definitions ---
+
+    declares: new Set([
+        "var",
+        "let",
+        "const",
+        "global",
+
+        "function",
+        "fn",
+        "class",
+        "import",
+        "interface",
+        "type",
+        "enum",
+        "struct",
+        "union",
+        "module",
+        "namespace",
+        "using"
+    ]),
+
+    keywords: new Set([
+        "if", "else",
+        "while", "do", "for",
+        "switch", "case", "default",
+        "break", "continue", "return", "exclude",
+        "try", "catch", "finally",
+        "throw",
+        "async", "await",
+        "instanceof", "typeof",
+        "new", "extends", "private", "public", "protected", "static", "destructible",
+        "this",
+        "in",
+        "void",
+        "delete",
+        "super",
+        "yield",
+        "export"
+    ]),
+
+    specials: new Set([
+        "intern",
+        "extern",
+        "macro",
+        "arrayStruct",
+        "raw",
+        "char"
+    ]),
+
+    // Operator tokens
+    operators: new Set([
+        // Arithmetic
+        "+", "-", "*", "/", "%", "++", "--", "**",
+
+        // Equality / relational
+        "==", "!=", "===", "!==", "<", ">", "<=", ">=",
+
+        // Logical / nullish
+        "&&", "||", "!", "??",
+        "&&=", "||=", "??=",
+
+        // Assignment
+        "=", "+=", "-=", "*=", "/=", "%=", "**=",
+        "&=", "|=", "^=", "<<=", ">>=", ">>>=",
+
+        // Bitwise / shifts
+        "&", "|", "^", "~", "<<", ">>", ">>>",
+
+        // Member / punctuation
+        ".", ",", ":", "...", "?.", "?.[", "?.(",
+
+        // Misc
+        "=>", "?", "::",
+
+        // Memory
+        "<-", "->", "<->", "*",
+
+        // Loops
+        "@", "@@", "@@@",
+    ]),
+
+    // Operator precedence table (higher is tighter binding)
+    PRECEDENCE: {
+        "=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1,
+        "||": 2, "??": 2,
+        "&&": 3,
+        "|": 4,
+        "^": 5,
+        "&": 6,
+        "==": 7, "!=": 7, "===": 7, "!==": 7,
+        "<": 8, ">": 8, "<=": 8, ">=": 8,
+        "<<": 9, ">>": 9, ">>>": 9,
+        "+": 10, "-": 10,
+        "*": 11, "/": 11, "%": 11,
+        "**": 12
+    },
+
+    BRACKETS: {
+        OPENING: new Set([40, 91, 123, 60]),
+        CLOSING: new Set([41, 93, 125, 62]),
+    },
+
+
+    // --- Enums ---
+
+    // Lexer states
+    STATE_DEFAULT: 0,
+    STATE_IDENTIFIER: 1,
+    STATE_NUMBER: 2,
+
+    // Lexer Token Types
+    TOKEN_IDENTIFIER: "identifier",
+    TOKEN_NUMBER: "number",
+    TOKEN_STRING: "string",
+    TOKEN_COMMENT: "comment",
+    TOKEN_OPERATOR: "operator",
+    TOKEN_KEYWORD: "keyword",
+    TOKEN_DECLARATION: "declaration",
+    TOKEN_LITERAL: "literal",
+    TOKEN_OPENING_BRACE: "opening_brace",
+    TOKEN_CLOSING_BRACE: "closing_brace",
+    TOKEN_SEMICOLON: "semicolon",
+    // TOKEN_IDENTIFIER: 0,
+    // TOKEN_NUMBER: 1,
+    // TOKEN_STRING: 2,
+    // TOKEN_COMMENT: 3,
+    // TOKEN_OPERATOR: 4,
+    // TOKEN_KEYWORD: 5,
+    // TOKEN_DECLARATION: 6,
+    // TOKEN_LITERAL: 7,
+    // TOKEN_OPENING_BRACE: 8,
+    // TOKEN_CLOSING_BRACE: 9,
+    // TOKEN_SEMICOLON: 10,
+
+    // AST Node Types
+    TYPE_DECLARATION: "DECLARATION",
+    TYPE_FUNCTION: "FUNCTION",
+    TYPE_IDENTIFIER: "IDENTIFIER",
+    TYPE_LITERAL: "LITERAL",
+    TYPE_EXPRESSION: "EXPRESSION",
+    TYPE_EXPRESSION_STATEMENT: "EXPRESSION_STATEMENT",
+    TYPE_STATEMENT: "STATEMENT",
+    TYPE_UNARY_OP: "UNARY_OP",
+    TYPE_BINARY_OP: "BINARY_OP",
+    TYPE_BLOCK_STATEMENT: "BLOCK_STATEMENT",
+    TYPE_PROGRAM: "PROGRAM",
+    // TYPE_DECLARATION: 0,
+    // TYPE_FUNCTION: 1,
+    // TYPE_IDENTIFIER: 2,
+    // TYPE_LITERAL: 3,
+    // TYPE_EXPRESSION: 4,
+    // TYPE_EXPRESSION_STATEMENT: 5,
+    // TYPE_STATEMENT: 6,
+    // TYPE_UNARY_OP: 7,
+    // TYPE_BINARY_OP: 8,
+    // TYPE_BLOCK_STATEMENT: 9,
+    // TYPE_PROGRAM: 10,
+}
+
+lang.OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
+
+/**
+ * Token class representing a lexical token
+ */
+class Token {
+    constructor(type, value, start, end) {
+        this.type = type;
+        this.value = value;
+        this.start = start;
+        this.end = end;
+    }
+
+    matches(type, value = null) {
+        if(this.type !== type) return false;
+        if(value !== null && this.value !== value) return false;
+        return true;
+    }
+}
+
+/**
+ * Base state class for Lexer and Parser
+ */
+class State {
+    constructor(options = {}) {
+        this.position = 0;
+        if(options.onWarn) this.onWarn = options.onWarn;
+        if(options.onError) this.onError = options.onError;
+        if(options.onNote) this.onNote = options.onNote;
+        this.options = options;
+    }
+
+    note(message) {
+        const loc = this.getLocationInfo();
+        const locationStr = loc.line || loc.column ? ` at line ${loc.line}:${loc.column}` : "";
+        const tokenInfo = this._tokenInfo(loc.token);
+        (typeof this.onNote === "function" ? this.onNote : console.log)(`${message}${locationStr}${tokenInfo}`);
+    }
+
+    warn(message) {
+        const loc = this.getLocationInfo();
+        const locationStr = loc.line || loc.column ? ` at line ${loc.line}:${loc.column}` : "";
+        const tokenInfo = this._tokenInfo(loc.token);
+        (typeof this.onWarn === "function" ? this.onWarn : console.warn)(`${message}${locationStr}${tokenInfo}`);
+    }
+
+    error(message, type) {
+        const loc = this.getLocationInfo();
+        const locationStr = loc.line || loc.column ? ` at line ${loc.line}:${loc.column}` : "";
+        const tokenInfo = this._tokenInfo(loc.token);
+        const full = `${message}${locationStr}${tokenInfo}`;
+        const error = new (type || Error)(full);
+        if(typeof this.onError === "function") this.onError(error);
+        throw error;
+    }
+
+    getLocationInfo() {
+        let line = this.line || 0;
+        let column = this.column || 0;
+        let token = null;
+
+        if (Array.isArray(this.tokens) && typeof this.position === lang.TOKEN_NUMBER) {
+            const t = this.tokens[this.position];
+            if (t) {
+                token = t;
+                if (typeof t.line === lang.TOKEN_NUMBER) line = t.line;
+                if (typeof t.column === lang.TOKEN_NUMBER) column = t.column;
+            }
+        }
+
+        return { line, column, token };
+    }
+
+    _cutValue(value, maxLength = 20) {
+        if (value.length > maxLength) {
+            return value.substring(0, maxLength - 3) + "...";
+        }
+        return value;
+    }
+
+    _tokenInfo(token) {
+        if (!token) return "";
+        return `\n - near ${token.type} '${this._cutValue(token.value)}' (start=${token.start}, end=${token.end})`;
+    }
+}
+
+class LexerState extends State {
+    constructor(source = "", options = {}) {
+        super(options);
+
+        this.line = 1;
+        this.column = 1;
+        this.source = source;
+        this.inString = false;
+        this.inTemplateString = false;
+        this.stringDelimiter = null;
+
+        this.set_state(lang.STATE_DEFAULT);
+
+        this.valueStart = 0;
+
+        this.tokens = [];
+    }
+
+    isEnd() {
+        return this.position >= this.source.length - 1;
+    }
+
+    push(token) {
+        if(!(token instanceof Token)) {
+            this.error("Lexer attempted to push non-Token object to tokens list");
+        }
+
+        token.start = token.start || this.valueStart;
+        token.end = token.end || this.position;
+        token.line = token.line || this.line;
+        token.column = token.column || this.column;
+        this.tokens.push(token);
+    }
+
+    set_state(newState) {
+        this.prevCode = this.code;
+        this.code = newState;
+    }
+
+    reset() {
+        this.set_state(lang.STATE_DEFAULT);
+        this.position = 0;
+        this.line = 1;
+        this.column = 1;
+        this.inString = false;
+        this.stringDelimiter = null;
+        this.valueStart = 0;
+    }
+
+    val_start(offset = 0) {
+        this.valueStart = this.position + offset;
+    }
+
+    get_value(offset = 0) {
+        return this.source.substring(this.valueStart, this.position + offset);
+    }
+
+    start_string(delim) {
+        this.inString = true;
+        this.stringDelimiter = delim;
+        this.inTemplateString = (delim === 96);
+        this.val_start(1);
+    }
+}
+/**
+ * Lexical analysis: Tokenizes the input code
+ * @param {LexerState} state The LexerState to continue lexing
+ * @returns {object} The AST 
+ */
+function continueLexing(state) {
+    if(!state || !(state instanceof LexerState)) {
+        throw new Error("Invalid LexerState provided to continueLexing");
+    }
+
+    for(; state.position < state.source.length; state.position++) {
+        const isEnd = state.isEnd();
+        let char = state.source.charCodeAt(state.position);
+
+        if(char === 10) {
+            state.line++;
+            state.column = 1;
+
+            // Line range filtering
+            if(state.options.fromLine && state.line < state.options.fromLine) continue;
+            if(state.options.toLine === state.line + 1) break;
+        } else {
+            state.column++;
+        }
+
+        if(state.inString) {
+            if(char === state.stringDelimiter) {
+                state.inString = false;
+                state.stringDelimiter = null;
+                let value = state.get_value();
+                state.push(new Token(lang.TOKEN_STRING, value));
+                state.set_state(lang.STATE_DEFAULT);
+                continue;
+            }
+
+            if(isEnd) {
+                state.error("Unterminated string literal");
+            }
+            continue;
+        }
+
+        if(state.code === lang.STATE_DEFAULT) {
+            if(lang.isWhitespace(char)) {
+                continue;
+            }
+
+            // String start
+            if(lang.isStringDelimiter(char)) {
+                state.start_string(char);
+
+                if(isEnd) {
+                    state.error("Unterminated string literal");
+                }
+                continue;
+            }
+
+            // Single-line comments
+            if(lang.isSLCommentStart(char, state.source.charCodeAt(state.position + 1))) {
+                let endIdx = state.source.indexOf(lang.SLCommentEnd, state.position + 2);
+                if(endIdx === -1) {
+                    endIdx = state.source.length;
+                }
+
+                if(state.options.keepComments) {
+                    let comment = state.source.substring(state.position, endIdx);
+                    state.push(new Token(lang.TOKEN_COMMENT, comment, state.position, endIdx));
+                }
+
+                state.position = endIdx - 1;
+                continue;
+            }
+
+            // Multi-line comments
+            if(lang.isMLCommentStart(char, state.source.charCodeAt(state.position + 1))) {
+                const ogPosition = state.position;
+
+                let idx = state.position + 2;
+                let endFound = false;
+                while(idx < state.source.length) {
+                    let c1 = state.source.charCodeAt(idx);
+                    let c2 = state.source.charCodeAt(idx + 1);
+                    if(lang.isMLCommentEnd(c1, c2)) {
+                        endFound = true;
+                        break;
+                    }
+
+                    if(c1 === 10) {
+                        state.line++;
+                        state.column = 1;
+                    }
+
+                    idx++;
+                }
+
+                if(!endFound) {
+                    return state.error("Unterminated multiline comment");
+                }
+
+                state.position = idx + 1;
+
+                if(state.options.keepComments) {
+                    let comment = state.source.substring(state.position + 2, idx);
+                    state.push(new Token(lang.TOKEN_COMMENT, comment, ogPosition));
+                }
+                continue;
+            }
+
+            if(lang.isIdentStart(char)) {
+                state.set_state(lang.STATE_IDENTIFIER);
+
+                if(isEnd) {
+                    state.push(new Token(lang.TOKEN_IDENTIFIER, String.fromCharCode(char)));
+                    break;
+                }
+
+                state.val_start();
+                continue;
+            }
+
+            if(lang.isDigit(char)) {
+                if(isEnd) {
+                    state.push(new Token(lang.TOKEN_NUMBER, String.fromCharCode(char)) );
+                    break;
+                }
+
+                state.dotSeen = false;
+                state.set_state(lang.STATE_NUMBER);
+                state.val_start();
+                continue;
+            }
+
+            // Number starting with dot
+            if(char === 46) { // .
+                let nextChar = state.source.charCodeAt(state.position + 1);
+                if(lang.isDigit(nextChar)) {
+                    state.dotSeen = true;
+                    state.set_state(lang.STATE_NUMBER);
+                    state.val_start();
+                    continue;
+                }
+            }
+
+            // Opening braces
+            if(lang.BRACKETS.OPENING.has(char)) {
+                state.push(new Token(lang.TOKEN_OPENING_BRACE, String.fromCharCode(char)));
+                continue;
+            }
+
+            // Closing braces
+            if(lang.BRACKETS.CLOSING.has(char)) {
+                state.push(new Token(lang.TOKEN_CLOSING_BRACE, String.fromCharCode(char)));
+                continue;
+            }
+
+            // Semicolon
+            if(char === 59) { // ;
+                state.push(new Token(lang.TOKEN_SEMICOLON, ";"));
+                continue;
+            }
+
+            // Operators
+            if(lang.OPCHARS.has(char)) {
+                let startPos = state.position;
+                let opStr = String.fromCharCode(char);
+                let nextChar = state.source.charCodeAt(state.position + 1);
+                while(!isEnd) {
+                    let potentialOp = opStr + String.fromCharCode(nextChar);
+                    if(lang.operators.has(potentialOp)) {
+                        opStr = potentialOp;
+                        state.position++;
+                        nextChar = state.source.charCodeAt(state.position + 1);
+                    } else {
+                        break;
+                    }
+                }
+                state.push(new Token(lang.TOKEN_OPERATOR, opStr, startPos, state.position + 1));
+                continue;
+            }
+
+            // Unknown character
+            state.error(`Unexpected character: '${String.fromCharCode(char)}' (code ${char})`);
+
+            continue;
+        }
+
+        if(state.code === lang.STATE_IDENTIFIER) {
+            const isIdent = lang.isIdentPart(char);
+            
+            if(!isEnd && isIdent) {
+                continue;
+            }
+
+            if(!isIdent) state.position--;
+            let value = state.get_value(1);
+
+            if(lang.declares.has(value)) {
+                state.push(new Token(lang.TOKEN_DECLARATION, value));
+            } else if(lang.keywords.has(value)) {
+                state.push(new Token(lang.TOKEN_KEYWORD, value));
+            } else if (value === "true" || value === "false" || value === "null" || value === "undefined") {
+                state.push(new Token(lang.TOKEN_LITERAL, value));
+            } else {
+                state.push(new Token(lang.TOKEN_IDENTIFIER, value));
+            }
+
+            state.val_start();
+            state.set_state(lang.STATE_DEFAULT);
+
+            continue;
+        }
+
+        if(state.code === lang.STATE_NUMBER) {
+            if(char === 120 || char === 88) { // x or X
+                // Hexadecimal
+                if(state.position === state.valueStart + 1 && state.source.charCodeAt(state.valueStart) === 48) {
+                    state.position++;
+                    while(!state.isEnd()) {
+                        char = state.source.charCodeAt(state.position);
+                        if(!lang.isHexDigit(char)) {
+                            break;
+                        }
+                        state.position++;
+                    }
+
+                    let value = state.get_value(isEnd? 1 : 0);
+                    state.push(new Token(lang.TOKEN_NUMBER, value));
+                    state.val_start();
+                    state.set_state(lang.STATE_DEFAULT);
+                    if(!isEnd) {
+                        state.position--;
+                    }
+                    continue;
+                } else {
+                    return state.error("Invalid number format: unexpected 'x' in number");
+                }
+            }
+
+            if(char === 46) { // .
+                if(state.dotSeen) {
+                    return state.error("Invalid number format: multiple decimal points");
+                }
+
+                state.dotSeen = true;
+            }
+
+            const isDigit = lang.isDigit(char);
+
+            if(!isEnd && (isDigit || char === 46)) { // .
+                continue;
+            }
+
+            if(!isDigit && char !== 46) state.position--;
+            let value = state.get_value(1);
+
+            state.push(new Token(lang.TOKEN_NUMBER, value));
+            state.val_start();
+            state.set_state(lang.STATE_DEFAULT);
+            continue;
+        }
+    }
+
+    return state.tokens;
+}
+
+class ParserState extends State {
+    constructor(tokens = [], options = {}) {
+        super(options);
+        this.tokens = tokens;
+    }
+
+    isEnd() {
+        return this.position >= this.tokens.length;
+    }
+
+    peek(offset = 0) {
+        if(this.position + offset >= this.tokens.length) {
+            return null;
+        }
+        return this.tokens[this.position + offset];
+    }
+
+    consume() {
+        const token = this.tokens[this.position];
+        this.position++;
+        return token;
+    }
+
+    match(type, value = null) {
+        const token = this.peek();
+        if(!token) return false;
+        if(token.type !== type) return false;
+        if(value !== null && token.value !== value) return false;
+        this.position++;
+        return token;
+    }
+
+    expect(type, value = null, customMessage = null) {
+        const token = this.peek();
+        const message = customMessage || `Expected token of type '${type}'${value !== null ? ` with value '${value}'` : ""}`;
+
+        if(!token || token.type !== type || (value !== null && token.value !== value)) {
+            this.error(`${message}, but ${token ? "got" : "reached"} ${this._describeToken(token)}`);
+        }
+
+        this.position++;
+        return token;
+    }
+
+    _describeToken(token) {
+        if(!token) return "end of input";
+
+        if(token.type === lang.TOKEN_SEMICOLON || token.type === lang.TOKEN_OPENING_BRACE || token.type === lang.TOKEN_CLOSING_BRACE) {
+            return "'" + token.value + "'";
+        }
+
+        if(token.type === lang.TOKEN_OPERATOR) {
+            return `operator '${token.value}'`;
+        }
+
+        if(token.type === lang.TOKEN_IDENTIFIER) {
+            return `identifier '${token.value}'`;
+        }
+
+        if(token.type === lang.TOKEN_NUMBER) {
+            return `number '${token.value}'`;
+        }
+
+        if(token.type === lang.TOKEN_STRING) {
+            return `string '${this._cutValue(token.value)}'`;
+        }
+
+        if(token.type === lang.TOKEN_LITERAL) {
+            return `literal '${token.value}'`;
+        }
+
+        if(token.type === lang.TOKEN_COMMENT) {
+            return `comment '${this._cutValue(token.value)}'`;
+        }
+
+        if(token.type === lang.TOKEN_DECLARATION) {
+            return `declarator '${token.value}'`;
+        }
+
+        return `type '${token.type}' with value '${token.value}'`;
+    }
+}
+
+class Span {
+    constructor({ start, end, line, column } = {}) {
+        this.start = start;
+        this.end = end;
+        this.line = line;
+        this.column = column;
+    }
+
+    /**
+     * Create a Span from a set of tokens
+     * @param {...Token} tokens The tokens (or Span) to create the span from (takes first and last)
+     * @returns {Span} The created Span
+     */
+    static from() {
+        if(arguments.length === 0) {
+            return new Span();
+        }
+
+        const startToken = arguments[0];
+        const endToken = arguments[arguments.length - 1] || arguments[0];
+
+        return new Span({
+            start: startToken.start,
+            end: endToken.end,
+            line: startToken.line,
+            column: startToken.column
+        });
+    }
+}
+
+/**
+ * Parsing: Converts tokens into an Abstract Syntax Tree (AST)
+ * @param {ParserState} state The ParserState to continue parsing
+ * @returns {object} The AST 
+ */
+function continueParsing(state) {
+    if(!(state instanceof ParserState)) {
+        throw new Error("Invalid ParserState provided to continueParsing");
+    }
+
+    // Top-level program
+    return parseBlock(state, true);
+}
+
+function parseBlock(state, topLevel = false) {
+    const open = topLevel? null: state.expect(lang.TOKEN_OPENING_BRACE, "{");
+    const body = [];
+
+    const MAX = 100 + state.tokens.length;
+    let it = 0;
+
+    while(
+        !state.isEnd()
+        && (topLevel || !state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, "}"))
+    ) {
+        // Safety check against infinite loops, just in case, should never happen
+        if(it++ > MAX) state.error("Parsing block exceeded maximum iteration count (possible infinite loop)");
+
+        // Ignore comments
+        if (state.peek()?.type === lang.TOKEN_COMMENT) { state.consume(); continue }
+
+        const statement = parseStatement(state);
+        body.push(statement);
+
+        if(statement.type !== lang.TYPE_BLOCK_STATEMENT) {
+            state.expect(lang.TOKEN_SEMICOLON, null, "Expected ';' after statement");
+        } else {
+            state.match(lang.TOKEN_SEMICOLON, null);
+        }
+    }
+
+    if (!topLevel) state.expect(lang.TOKEN_CLOSING_BRACE, "}");
+    return { type: topLevel? lang.TYPE_PROGRAM : lang.TYPE_BLOCK_STATEMENT, body, span: topLevel? null: Span.from(open, state.peek(-1)) };
+}
+
+function parseStatement(state) {
+    const token = state.peek();
+
+    if(token.type === lang.TOKEN_DECLARATION) {
+        state.consume();
+
+        const nameTok = state.expect(lang.TOKEN_IDENTIFIER, null, `Expected name after '${token.value}' statement`);
+        let init = null, type = lang.TYPE_DECLARATION;
+
+        if(token.value === "var" || token.value === "let" || token.value === "global" || token.value === "const") {
+            if (state.match(lang.TOKEN_OPERATOR, "=")) {
+                init = parseExpression(state);
+            } else if (token.value === "const") {
+                state.error(`Constant declaration '${nameTok.value}' must be initialized`);
+            }
+        } else if(token.value === "function" || token.value === "fn") {
+            type = lang.TYPE_FUNCTION;
+            state.expect(lang.TOKEN_OPENING_BRACE, "(");
+        } else {
+            state.error(`Unsupported declaration type: '${token.value}'`);
+        }
+
+        return {
+            name: nameTok.value,
+            kind: token.value,
+            type,
+            init,
+            span: Span.from(token, init ?? nameTok)
+        };
+    }
+
+    // Fallback: expression statement
+    const expr = parseExpression(state);
+    return { type: lang.TYPE_EXPRESSION_STATEMENT, expr, span: expr.span };
+}
+
+function parseExpression(state, minPrec = 0) {
+    let left = parseAtom(state);
+
+    while (!state.isEnd()) {
+        const token = state.peek();
+        
+        if (token.type !== lang.TOKEN_OPERATOR) break;
+        
+        const opDiff = lang.PRECEDENCE[token.value] || 0;
+        if (opDiff < minPrec) break;
+
+        // Consume operator
+        state.consume();
+
+        const nextMinPrec = (token.value === "**" || token.value === "=") ? opDiff : opDiff + 1;
+
+        const right = parseExpression(state, nextMinPrec);
+
+        left = {
+            type: lang.TYPE_BINARY_OP,
+            operator: token.value,
+            left: left,
+            right: right,
+            span: Span.from(left.span ?? token, right?.span ?? token) // simplified span logic
+        };
+    }
+
+    return left;
+}
+
+function parseAtom(state) {
+    const token = state.peek();
+
+    if(!token) {
+        return;
+    }
+
+    // Unary operators
+    if (token.type === lang.TOKEN_OPERATOR && ["+", "-", "!", "~", "typeof", "void", "delete", "++", "--"].includes(token.value)) {
+        state.consume();
+        const argument = parseAtom(state); // Recursively parse atoms
+        return {
+            type: lang.TYPE_UNARY_OP,
+            operator: token.value,
+            argument: argument,
+            span: Span.from(token, argument)
+        };
+    }
+
+    state.consume();
+
+    if(token.type === lang.TOKEN_NUMBER || token.type === lang.TOKEN_STRING || token.type === lang.TOKEN_LITERAL) {
+        return {
+            type: lang.TYPE_LITERAL,
+            typeOf: token.type,
+            value: token.value,
+            span: Span.from(token)
+        };
+    }
+
+    if(token.type === lang.TOKEN_IDENTIFIER) {
+        return {
+            type: lang.TYPE_IDENTIFIER,
+            name: token.value,
+            span: Span.from(token)
+        };
+    }
+
+    if(token.type === lang.TOKEN_OPENING_BRACE && token.value === "(") {
+        const expr = parseExpression(state);
+        state.expect(lang.TOKEN_CLOSING_BRACE, ")", "Expected ')' after expression");
+        return expr;
+    }
+
+    state.error(`Unexpected token in expression: ${state._describeToken(token)}`);
+}
+
+class Compiler extends State {
+    constructor(options = {}) {
+        super(options);
+        this.language = "unknown";
+        this.build = [];
+    }
+}
+
+class Compiler_JavaScript extends Compiler {
+    #interns;
+
+    static builtins = new Map([
+        ["__try_destroy", ""],
+
+        // UTF-8 encoding/decoding (Support for binary strings)
+        ["__u82s", "var __td;function __u82s(d){__td??=new TextDecoder(\"utf-8\");return __td.decode(Array.isArray(d)?new Uint8Array(d):d)};"],
+        ["__s2u8", "var __te;function __s2u8(s){__te??=new TextEncoder();return __te.encode(s)};"],
+
+        ["GDN", ""]
+    ]);
+
+    static globals = new Map([
+        ["print", (args) => `console.log(${args.join(", ")});`],
+    ]);
+
+    constructor(ast, options = {}) {
+        super(options);
+
+        this.ast = ast;
+        this.options = options;
+        this.#interns = new Set();
+
+        // Skip including certain builtins (eg. shared)
+        if(options.excludeBuiltins && Array.isArray(options.excludeBuiltins)) {
+            for(const name of options.excludeBuiltins) {
+                this.#interns.set(name, true);
+            }
+        }
+
+        this.language = "JavaScript";
+        this.build = [];
+    }
+
+    compile() {
+        for(const node of this.ast.body) {
+            if(node.type === lang.TYPE_DECLARATION) {
+                let line = `${node.kind === "global" ? "" : node.kind} ${node.name}`;
+                if(node.init) {
+                    console.log(node.init);
+                    
+                    line += ` = ${this.compileExpression(node.init)}`;
+                }
+
+                line += ";";
+
+                if(node.kind === "global") {
+                    this.note(`'global' declaration of variable '${node.name}'`);
+                    this.build.unshift(`var ${node.name};`); // Declare at top level
+                    this.build.push(line); // Initialize or set in place
+                } else {
+                    this.build.push(line);
+                }
+                continue;
+            }
+
+            if(node.type === lang.TYPE_FUNCTION) {
+                this.build.push(`function ${node.name}() {}`);
+                continue;
+            }
+
+            if(node.type === lang.TYPE_EXPRESSION_STATEMENT) {
+                const exprCode = this.compileExpression(node.expr);
+                this.build.push(`${exprCode};`);
+                continue;
+            }
+
+            this.error(`Unsupported AST node type at top level: ${node.type}`);
+        }
+        return this.build.join("");
+    }
+
+    compileExpression(node) {
+        if(!node) {
+            this.error("Cannot compile null/undefined expression node");
+        }
+
+        if(node.type === lang.TYPE_LITERAL) {
+            if(node.typeOf === lang.TOKEN_STRING) {
+                return JSON.stringify(node.value);
+            } else {
+                return node.value;
+            }
+        }
+
+        if(node.type === lang.TYPE_IDENTIFIER) {
+            return node.name;
+        }
+
+        if(node.type === lang.TYPE_BINARY_OP) {
+            return `(${this.compileExpression(node.left)} ${node.operator} ${this.compileExpression(node.right)})`;
+        }
+
+        if(node.type === lang.TYPE_UNARY_OP) {
+            // TODO: Add postfix support
+            return `(${node.operator}${this.compileExpression(node.argument)})`;
+        }
+
+        this.error(`Unsupported expression node type: ${node.type}`);
+    }
+
+    #useBuiltin(name) {
+        const block = Compiler_JavaScript.builtins.get(name);
+        if(block) {
+            this.#intern(name, block);
+        } else {
+            this.error(`Compiler used unknown builtin "${name}"`);
+        }
+    }
+
+    #intern(hash, block) {
+        if(!this.#interns.has(hash)) {
+            this.build.unshift(block);
+            this.#interns.add(hash);
+        }
+    }
+}
+
+class Compiler_CPP extends Compiler {}
+class Compiler_Bytecode extends Compiler {}
+
+/**
+ * Lexical analysis: Tokenizes the input code
+ * @param {string} code The source code to tokenize
+ * @param {object} options Options for the lexer
+ * @param {boolean} options.keepComments Whether to keep comments as tokens (otherwise discarded)
+ * @param {function} options.onWarn Warning callback
+ * @param {function} options.onError Error callback
+ * @param {function} options.onNote Note callback
+ * @param {number} options.fromLine Start line for line range filtering
+ * @param {number} options.toLine End line for line range filtering
+ * @returns {Token[]} List of tokens
+ */
+function tokenize(code, options = {}) {
+    const state = new LexerState(code, options);
+    return continueLexing(state);
+}
+
+/**
+ * Parsing: Converts tokens into an Abstract Syntax Tree (AST)
+ * @param {Token[]} tokens List of tokens to parse
+ * @param {object} options Options for the parser
+ * @param {function} options.onWarn Warning callback
+ * @param {function} options.onError Error callback
+ * @param {function} options.onNote Note callback
+ * @returns {object} The AST
+ */
+function parse(tokens, options = {}) {
+    const state = new ParserState(tokens, options);
+    return continueParsing(state);
+}
+
+/**
+ * Compilation: Converts AST into target code
+ * @param {*} ast 
+ * @param {*} options 
+ * @returns 
+ */
+function compile(ast, options = {}) {
+    const compiler = options.compiler || Compiler_JavaScript;
+    const compilerInstance = new compiler(ast, options);
+    return compilerInstance.compile();
+}
+
+// Helper function combining all steps
+function build(code, options = {}, extensions = []) {
+    const tokens = tokenize(code, options);
+    const ast = parse(tokens, options);
+
+    // Apply extensions / AST transformations before compilation
+    for(const ext of extensions) {
+        if(typeof ext === "function") {
+            ext(ast);
+        }
+    }
+
+    const compiled = compile(ast, options);
+    return compiled;
+}
+
+const GlitterExports = {
+    lang,
+    Token,
+
+    LexerState,
+    tokenize,
+
+    ParserState,
+    parse,
+
+    Compiler_JavaScript,
+    // Compiler_CPP,
+    compile,
+    build
+}
+
+window.Glitter = GlitterExports;

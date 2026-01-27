@@ -1,0 +1,61 @@
+<head>
+    @use (ls[flat, resize, toast, modal, animation, tabs, menu, ShortcutManager], bootstrap-icons, google-fonts["JetBrains Mono"]);
+
+    <!-- Glitter.js -->
+    @use ("/~/glitter.js");
+
+    <!-- Styles -->
+    @use ("./assets/index.css");
+
+    <!-- Layout engine -->
+    @use ("./assets/layout.js");
+
+    <!-- Main -->
+    @use ("./assets/index.js") { defer }
+
+
+    <!-- To prettify JS output -->
+    <script async src="https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/standalone.js" integrity="sha512-kZgYwuJlmuFDs982ccZLP9D+TIz/FqkxFQe+G0/TY11X4WqwUZn6P263vtzyt56GThngcoOD9JFvdJsT+D52ow==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script async src="https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/parser-babel.min.js" integrity="sha512-2VpL2CQOwACkU58IzGit5Zvl1cinncah3Pd6k0BEhzRhx7jlCAPtK+b8E10+17TrMFg6Nzs8pZGHBJqAR8Tjbg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <!-- Manifest -->
+    @page {
+        title: "Glitter Language Demo";
+        font: "JetBrains Mono, monospace";
+        favicon: "/~/icon.svg";
+
+        theme: "dark";
+        style: "flat";
+        accent: "purple";
+    }
+
+    <!-- Preload styles -->
+    <style>
+        :root, body {
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            background: var(--surface-n2) !important;
+            user-select: none;
+        }
+    </style>
+</head>
+
+<body class="level-0">
+    <main #editor-container>
+        <nav #editor-header .level-2>
+            <div>
+                <img style="height: 1.2em; margin-right: 4px" src="/~/icon.svg" alt="Icon">
+                <div tabindex="0" .header-menu-category>Examples</div>
+                <div tabindex="0" .header-menu-category>Layout</div>
+                <!-- <div tabindex="0" .header-menu-category>Options</div> -->
+                <div tabindex="0" .header-menu-category>Help</div>
+            </div>
+        </nav>
+
+        <div #layout-container />
+
+        <footer #editor-footer></footer>
+    </main>
+</body>
