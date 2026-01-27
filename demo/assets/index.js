@@ -361,8 +361,7 @@ const menus = {
 
     examples: [
         { text: "Hello World", action() {
-            const code = `// Hello World example
-print("Hello, World!");`;
+            const code = `print("Hello, World!");`;
             events.quickEmit("glitter:set-code", { code });
         } },
     ],
@@ -394,7 +393,7 @@ print("Hello, World!");`;
         { text: "About", icon: "bi-stars", action() {
             LS.Modal.buildEphemeral({
                 content: [
-                    { tag: 'img', src: '/~/icon.svg', style: 'height: 4em; width: 100%; margin: auto;object-fit: contain' },
+                    { tag: 'img', src: '/~/icon.svg', style: 'height: 8em; width: 100%; margin: auto;object-fit: contain' },
                     { tag: 'h2', inner: 'Glitter Language Demo', style: 'text-align: center; margin-bottom: 8px' },
                     { tag: 'p', inner: `Version 0.1 (Alpha)` },
                     { tag: 'p', inner: ['Created with love and hard work by Lukas (', { tag: 'a', href: 'https://lstv.space', target: '_blank', inner: 'https://lstv.space' }, ')'] },

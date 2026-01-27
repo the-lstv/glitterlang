@@ -1,182 +1,13 @@
 <!DOCTYPE html>
 <!-- Server-generated code. Powered by Akeno v1.6.8-beta - https://github.com/the-lstv/Akeno -->
-<html lang="en"><head><link rel=stylesheet href="https://cdn.extragon.cloud/ls/5.2.8/flat/ls.css"><link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'"><noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"></noscript><link rel=preconnect href="https://fonts.googleapis.com"><link rel=preconnect href="https://fonts.gstatic.com" crossorigin><link rel=stylesheet href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap">
-    <link rel=stylesheet href="./index.css?mtime=mkwf5n1l.bh" >
-    <script src="../glitter.js?mtime=mkwf3v3y.2lc" ></script><script async src='https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/standalone.js' integrity='sha512-kZgYwuJlmuFDs982ccZLP9D+TIz/FqkxFQe+G0/TY11X4WqwUZn6P263vtzyt56GThngcoOD9JFvdJsT+D52ow==' crossorigin='anonymous' referrerpolicy='no-referrer'></script><script async src='https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/parser-babel.min.js' integrity='sha512-2VpL2CQOwACkU58IzGit5Zvl1cinncah3Pd6k0BEhzRhx7jlCAPtK+b8E10+17TrMFg6Nzs8pZGHBJqAR8Tjbg==' crossorigin='anonymous' referrerpolicy='no-referrer'></script><meta charset="utf-8"><title>Glitter Language Demo</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body ls ls-theme="dark" ls-accent="purple" ls-style="flat" style="--font:JetBrains Mono, monospace" class="level-0"><main class="layout"><div class="editor-panel"><textarea name='input' id='input' style='width: 100%; resize: vertical;' spellcheck='false'>var x = 10 + 10;</textarea><div class="action-row"><button id='compile'>Compile</button><button id='run'>Run</button></div></div><div class="panels"><div class="panel"><h3>Compile logs</h3><div id='log-output' class="log-console"></div><div id='metrics' class="metrics"></div></div><div class="panel"><h3>AST Explorer</h3><div id='ast-tree'></div></div><div class="panel"><h3>Compiled Output (backend: <span id='backend-info'>JavaScript</span>)</h3><pre id='output'></pre></div></div></main><script>(() => {
-  const input = document.getElementById("input");
-  const output = document.getElementById("output");
-  const astTree = document.getElementById("ast-tree");
-  const logOutput = document.getElementById("log-output");
-  const metricsBox = document.getElementById("metrics");
-  const compileButton = document.getElementById("compile");
-  const runButton = document.getElementById("run");
-  let compiled;
-  const clearLogs = () => {
-    logOutput.replaceChildren();
-  };
-  const pushLog = (level, message) => {
-    const row = document.createElement("div");
-    row.className = `log-entry ${level}`;
-    const label = document.createElement("i");
-    label.className = `bi-${level === "error" ? "exclamation-circle" : level === "warn" ? "exclamation-triangle" : "info-circle"}`;
-    const text = document.createElement("span");
-    text.textContent = message;
-    row.appendChild(label);
-    row.appendChild(text);
-    logOutput.appendChild(row);
-  };
-  const literalClassFor = (literalNode) => {
-    if (!literalNode) return "literal-unknown";
-    if (literalNode.typeOf === lang.TOKEN_NUMBER) return "literal-number";
-    if (literalNode.typeOf === lang.TOKEN_STRING) return "literal-string";
-    if (literalNode.typeOf === lang.TOKEN_LITERAL) {
-      if (literalNode.value === "true" || literalNode.value === "false") return "literal-boolean";
-      if (literalNode.value === "null" || literalNode.value === "undefined") return "literal-nullish";
-    }
-    return "literal-unknown";
-  };
-  const truncateValue = (val, limit = 20) => {
-    const str = String(val);
-    if (str.length <= limit) return str;
-    return `${str.slice(0, limit - 1)}...`;
-  };
-  const renderAST = (ast) => {
-    astTree.replaceChildren();
-    if (!ast) return;
-    astTree.appendChild(createTreeNode(ast, "AST"));
-  };
-  const createLeaf = (value, label = "") => {
-    const leaf = document.createElement("div");
-    leaf.className = "tree-leaf";
-    const formatted = typeof value === "string" ? `"${value}"` : String(value);
-    leaf.textContent = label ? `${label}: ${formatted}` : formatted;
-    return leaf;
-  };
-  const createLiteralNode = (node, label) => {
-    const branch = document.createElement("details");
-    branch.open = false;
-    branch.className = "tree-branch";
-    const summary = document.createElement("summary");
-    const descriptor = label ? `${label}: ` : "";
-    summary.textContent = descriptor;
-    const chip = document.createElement("span");
-    chip.className = `literal-chip ${literalClassFor(node)}`;
-    let literalValue = node.value;
-    if (node.typeOf === lang.TOKEN_STRING) {
-      literalValue = `"${truncateValue(node.value)}"`;
-    } else {
-      literalValue = truncateValue(String(node.value ?? ""));
-    }
-    chip.textContent = literalValue;
-    summary.append(" ");
-    summary.appendChild(chip);
-    branch.appendChild(summary);
-    Object.keys(node).forEach((key) => {
-      branch.appendChild(createTreeNode(node[key], key));
-    });
-    return branch;
-  };
-  const createBranch = (value, label, summaryText) => {
-    const branch = document.createElement("details");
-    branch.open = label === "span" ? false : true;
-    branch.className = "tree-branch";
-    const summary = document.createElement("summary");
-    summary.textContent = label === "span" ? "span" : summaryText;
-    branch.appendChild(summary);
-    return branch;
-  };
-  const createTreeNode = (value, label = "") => {
-    if (value === null || typeof value !== "object") {
-      return createLeaf(value, label);
-    }
-    if (Array.isArray(value)) {
-      const branch2 = createBranch(value, label, label ? `${label}: Array(${value.length})` : `Array(${value.length})`);
-      value.forEach((item, index) => {
-        branch2.appendChild(createTreeNode(item, `[${index}]`));
-      });
-      return branch2;
-    }
-    if (value.type === lang.TYPE_LITERAL) {
-      return createLiteralNode(value, label);
-    }
-    const descriptor = value.type || "Object";
-    const branch = createBranch(value, label, label ? `${label}: ${descriptor}` : descriptor);
-    Object.keys(value).forEach((key) => {
-      const child = createTreeNode(value[key], key);
-      branch.appendChild(child);
-    });
-    return branch;
-  };
-  compileButton.addEventListener("click", () => {
-    clearLogs();
-    metricsBox.textContent = "";
-    astTree.replaceChildren();
-    const stageLogger = (stage, level) => (message) => {
-      pushLog(level, `[${stage}] ${message}`);
-    };
-    const stageError = (stage) => (err) => {
-      const msg = err?.message || String(err);
-      pushLog("error", `[${stage}] ${msg}`);
-      throw err;
-    };
-    try {
-      const t0 = performance.now();
-      const tokens = Glitter.tokenize(input.value, {
-        onWarn: stageLogger("lex", "warn"),
-        // onError: stageError("lex"),
-        onNote: stageLogger("lex", "note")
-      });
-      const t1 = performance.now();
-      const ast = Glitter.parse(tokens, {
-        onWarn: stageLogger("parse", "warn"),
-        // onError: stageError("parse"),
-        onNote: stageLogger("parse", "note")
-      });
-      const t2 = performance.now();
-      compiled = Glitter.compile(ast, {
-        onWarn: stageLogger("compile", "warn"),
-        // onError: stageError("compile"),
-        onNote: stageLogger("compile", "note")
-      });
-      const t3 = performance.now();
-      if (window.prettier && window.prettierPlugins) {
-        compiled = prettier.format(compiled, {
-          parser: "babel",
-          plugins: prettierPlugins,
-          semi: true,
-          singleQuote: false,
-          tabWidth: 4
-        });
-      }
-      console.log(tokens);
-      console.log(ast);
-      console.log(compiled);
-      renderAST(ast);
-      output.textContent = compiled;
-      metricsBox.innerHTML = `
-                    <div>Lex: ${(t1 - t0).toFixed(2)} ms</div>
-                    <div>Parse: ${(t2 - t1).toFixed(2)} ms</div>
-                    <div>Compile: ${(t3 - t2).toFixed(2)} ms</div>
-                    <div>Total: ${(t3 - t0).toFixed(2)} ms</div>
-                `;
-    } catch (err) {
-      pushLog("error", err?.message || String(err));
-      console.error(err);
-      output.textContent = "";
-      compiled = void 0;
-    }
-  });
-  runButton.addEventListener("click", () => {
-    if (!compiled) {
-      console.warn("Nothing has been compiled yet.");
-      return;
-    }
-    try {
-      const func = new Function(compiled);
-      func();
-    } catch (error) {
-      pushLog("error", `[runtime] ${error?.message || error}`);
-    }
-  });
-})();
-</script></body></html>
+<html lang="en"><head><link rel=stylesheet href="https://cdn.extragon.cloud/ls/5.2.8/flat/ls.css"><script src="https://cdn.extragon.localhost/ls/5.2.8/shortcutmanager,animation,menu,modal,resize,tabs,toast/ls.js"></script><link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'"><noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"></noscript><link rel=preconnect href="https://fonts.googleapis.com"><link rel=preconnect href="https://fonts.gstatic.com" crossorigin><link rel=stylesheet href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap"><script src="../glitter.js?mtime=mkwipegu.pf" ></script><link rel=stylesheet href="./assets/index.css?mtime=mkwkjswc.7lp" ><script src="./assets/layout.js?mtime=mkwk57tm.1f" ></script><script src="./assets/index.js?mtime=mkwkn8rk.d8u"  defer></script><script async src='https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/standalone.js' integrity='sha512-kZgYwuJlmuFDs982ccZLP9D+TIz/FqkxFQe+G0/TY11X4WqwUZn6P263vtzyt56GThngcoOD9JFvdJsT+D52ow==' crossorigin='anonymous' referrerpolicy='no-referrer'></script><script async src='https://cdnjs.cloudflare.com/ajax/libs/prettier/2.0.3/parser-babel.min.js' integrity='sha512-2VpL2CQOwACkU58IzGit5Zvl1cinncah3Pd6k0BEhzRhx7jlCAPtK+b8E10+17TrMFg6Nzs8pZGHBJqAR8Tjbg==' crossorigin='anonymous' referrerpolicy='no-referrer'></script><meta charset="utf-8"><title>Glitter Language Demo</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="shortcut icon" href="/~/icon.svg" type="image/svg+xml"><style>:root,
+body {
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--surface-n2) !important;
+  -webkit-user-select: none;
+  user-select: none;
+}
+</style></head><body ls ls-theme="dark" ls-accent="purple" ls-style="flat" style="--font:JetBrains Mono, monospace" class="level-0"><main id="editor-container"><nav id="editor-header" class="level-2"><div><img style='height: 1.2em; margin-right: 4px' src='/~/icon.svg' alt='Icon'><div tabindex='0' class="header-menu-category">Examples</div><div tabindex='0' class="header-menu-category">Layout</div><div tabindex='0' class="header-menu-category">Help</div></div></nav><div id="layout-container"></div><footer id="editor-footer"></footer></main></body></html>
