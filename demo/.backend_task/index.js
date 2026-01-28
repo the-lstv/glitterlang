@@ -18,4 +18,5 @@ app.on("refreshed-cache", (file, entry) => {
             });
         }
     }
+    return;
 });

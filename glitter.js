@@ -8,7 +8,10 @@
  * Included is a JavaScript backend as a demonstration.
  * 
  * Copyright (c) 2026 lstv.space
+ * Licensed under the GNU General Public License v3.0
  */
+
+const isNode = typeof process !== "undefined" && process.versions != null && process.versions.node != null;
 
 /**
  * Language definitions and helpers
@@ -114,12 +117,10 @@ const lang = {
         "try", "catch", "finally",
         "throw",
         "async", "await",
-        "instanceof", "typeof",
         "new", "extends", "private", "public", "protected", "static", "destructible",
         "this",
         "in",
         "void",
-        "delete",
         "super",
         "yield",
         "export"
@@ -161,6 +162,12 @@ const lang = {
 
         // Memory
         "<-", "->", "<->", "*",
+
+        // Type operators
+        "instanceof", "typeof",
+
+        // Other (delete is an operator in JS for some reason)
+        "delete", "void",
 
         // Loops
         "@", "@@", "@@@",
@@ -252,8 +259,8 @@ lang.OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
  */
 class Token {
     constructor(type, value, start, end) {
-        this.type = type.toString();
-        this.value = value.toString();
+        this.type = type?.toString();
+        this.value = value?.toString();
         this.start = start;
         this.end = end;
     }
@@ -269,7 +276,7 @@ class Token {
     isView = true;
 
     constructor(buffer) {
-        this.u8 = (buffer instanceof Uint8Array) ? buffer : new Uint8Array(buffer);
+        this.u8 = (buffer instanceof Uint8Array || (typeof Buffer !== "undefined" && Buffer.isBuffer(buffer))) ? buffer : new Uint8Array(buffer);
     }
 
     charCodeAt(index) {
@@ -352,6 +359,7 @@ class State {
     }
 
     _cutValue(value, maxLength = 20) {
+        if(typeof value !== "string") return value;
         if (value && value.length > maxLength) {
             return value.substring(0, maxLength - 3) + "...";
         }
@@ -589,7 +597,7 @@ function continueLexing(state) {
 
             // Semicolon
             if(char === 59) { // ;
-                state.push(new Token(lang.TOKEN_SEMICOLON, ";"));
+                state.push(new Token(lang.TOKEN_SEMICOLON));
                 continue;
             }
 
@@ -741,6 +749,15 @@ class ParserState extends State {
         return token;
     }
 
+    skipExtras() {
+        let peek;
+        while(!this.isEnd() && (peek = this.peek().type) && (peek === lang.TOKEN_COMMENT || peek === lang.TOKEN_NL)) {
+            this.consume();
+        }
+
+        return this.isEnd();
+    }
+
     _describeToken(token) {
         if(!token) return "end of input";
 
@@ -752,32 +769,19 @@ class ParserState extends State {
             return "newline";
         }
 
-        if(token.type === lang.TOKEN_OPERATOR) {
-            return `operator '${token.value}'`;
+        /**precomp*/const name = {
+            [lang.TOKEN_OPERATOR]: "operator",
+            [lang.TOKEN_IDENTIFIER]: "identifier",
+            [lang.TOKEN_NUMBER]: "number",
+            [lang.TOKEN_STRING]: "string",
+            [lang.TOKEN_LITERAL]: "literal",
+            [lang.TOKEN_COMMENT]: "comment",
+            [lang.TOKEN_DECLARATION]: "declarator",
+            [lang.TOKEN_KEYWORD]: "keyword",
         }
 
-        if(token.type === lang.TOKEN_IDENTIFIER) {
-            return `identifier '${token.value}'`;
-        }
-
-        if(token.type === lang.TOKEN_NUMBER) {
-            return `number '${token.value}'`;
-        }
-
-        if(token.type === lang.TOKEN_STRING) {
-            return `string '${this._cutValue(token.value)}'`;
-        }
-
-        if(token.type === lang.TOKEN_LITERAL) {
-            return `literal '${token.value}'`;
-        }
-
-        if(token.type === lang.TOKEN_COMMENT) {
-            return `comment '${this._cutValue(token.value)}'`;
-        }
-
-        if(token.type === lang.TOKEN_DECLARATION) {
-            return `declarator '${token.value}'`;
+        if(name[token.type]) {
+            return `${name[token.type]} '${this._cutValue(token.value)}'`;
         }
 
         return `type '${token.type}' with value '${token.value}'`;
@@ -842,13 +846,14 @@ function parseBlock(state, topLevel = false) {
         // Safety check against infinite loops, just in case, should never happen
         if(it++ > MAX) state.error("Parsing block exceeded maximum iteration count (possible infinite loop)");
 
-        // Ignore comments
-        if (state.peek()?.type === lang.TOKEN_COMMENT) { state.consume(); continue }
+        // Ignore comments, newlines, extra semicolons
+        if(state.skipExtras()) break;
 
         const statement = parseStatement(state);
         body.push(statement);
 
         if(statement.type !== lang.TYPE_BLOCK_STATEMENT) {
+            // For now semicolons are reuqired :(
             state.expect(lang.TOKEN_SEMICOLON, null, "Expected ';' after statement");
         } else {
             state.match(lang.TOKEN_SEMICOLON, null);
@@ -867,6 +872,10 @@ function parseStatement(state) {
 
         const nameTok = state.expect(lang.TOKEN_IDENTIFIER, null, `Expected name after '${token.value}' statement`);
         let init = null, type = lang.TYPE_DECLARATION;
+
+        if(state.isEnd()) {
+            state.error("Unexpected end of input in declaration statement");
+        }
 
         if(token.value === "var" || token.value === "let" || token.value === "global" || token.value === "const") {
             if (state.match(lang.TOKEN_OPERATOR, "=")) {
@@ -899,19 +908,22 @@ function parseExpression(state, minPrec = 0) {
     let left = parseAtom(state);
 
     while (!state.isEnd()) {
+        if(state.skipExtras()) break;
+
         const token = state.peek();
-        
+
+        // No more operators to process
         if (token.type !== lang.TOKEN_OPERATOR) break;
-        
+
         const opDiff = lang.PRECEDENCE[token.value] || 0;
         if (opDiff < minPrec) break;
 
-        // Consume operator
+        // Consume operator (yummy)
         state.consume();
 
-        const nextMinPrec = (token.value === "**" || token.value === "=") ? opDiff : opDiff + 1;
-
-        const right = parseExpression(state, nextMinPrec);
+        // = is right-associative
+        // TODO: Later handle both *var and var*
+        const right = parseExpression(state, (token.value === "=") ? opDiff : opDiff + 1);
 
         left = {
             type: lang.TYPE_BINARY_OP,
@@ -933,9 +945,15 @@ function parseAtom(state) {
     }
 
     // Unary operators
-    if (token.type === lang.TOKEN_OPERATOR && ["+", "-", "!", "~", "typeof", "void", "delete", "++", "--"].includes(token.value)) {
+    if (token.type === lang.TOKEN_OPERATOR && ["+", "*", "-", "!", "~", "typeof", "void", "delete", "++", "--"].includes(token.value)) {
         state.consume();
+
         const argument = parseAtom(state); // Recursively parse atoms
+        if(token.value === "*") {
+            argument.pointerDeref = true;
+            return argument;
+        }
+
         return {
             type: lang.TYPE_UNARY_OP,
             operator: token.value,
@@ -967,6 +985,10 @@ function parseAtom(state) {
         const expr = parseExpression(state);
         state.expect(lang.TOKEN_CLOSING_BRACE, ")", "Expected ')' after expression");
         return expr;
+    }
+
+    if(token.type === lang.TOKEN_NL) {
+        return;
     }
 
     state.error(`Unexpected token in expression: ${state._describeToken(token)}`);
@@ -1100,7 +1122,55 @@ class Compiler_JavaScript extends Compiler {
 }
 
 class Compiler_CPP extends Compiler {}
-class Compiler_Bytecode extends Compiler {}
+class Compiler_x86 extends Compiler {
+    constructor(ast, options = {}) {
+        super(options);
+        this.ast = ast;
+        this.options = options;
+        this.language = "x86 Assembly";
+        this.build = [];
+    }
+
+    reset() {
+        this.constants = new Map();
+        this.labels = new Map();
+        this.vmem = 0;
+        this.vcc = 0;
+    }
+
+    compile() {
+        for(const node of this.ast.body) {
+            if(node.type === lang.TYPE_DECLARATION) {
+                // At least that is how I think it works, Ill have to learn x86 eventually
+                let line = `mov [${this.getConstant(node.name)}], `;
+                if(node.init) {
+                    line += this.compileExpression(node.init);
+                } else {
+                    line += "0";
+                }
+            }
+        }
+    }
+
+    getConstant(name) {
+        if(this.constants.has(name)) {
+            return this.constants.get(name);
+        }
+
+        this.vcc++;
+        this.constants.set(name, this.vcc);
+
+        if(this.vcc > 4294967295) {
+            this.error("Exceeded 32-bit constant limit");
+        }
+
+        return this.vcc;
+    }
+
+    compileExpression(node) {}
+}
+
+// class Compiler_Bytecode extends Compiler {} // Nevermind
 
 /**
  * Lexical analysis: Tokenizes the input code

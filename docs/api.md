@@ -1,6 +1,8 @@
 
 # Glitter.js compiler API Documentation
 
+Skip [here](#cli-usage) for CLI usage.
+
 ## Core Functions
 
 ### `tokenize(code, options)`
@@ -24,7 +26,7 @@ Performs lexical analysis on source code.
 const tokens = Glitter.tokenize("let x = 42;");
 ```
 
-It is possible to pass an `Uint8Array` (or ArrayBuffer), which may be slightly faster especially if you already have a buffer.
+It is possible to pass an `Uint8Array` (or Buffer / ArrayBuffer), which may be slightly faster especially if you already have a buffer.
 
 ### `parse(tokens, options)`
 
@@ -111,3 +113,22 @@ Maintains parser state during AST construction.
 ### `Compiler_JavaScript`
 
 JavaScript backend compiler.
+
+## CLI Usage
+You can also use this library from the command line.
+
+### File extension
+Glitter does not have a standardized extension as of now; but it is recommended to use either `.gl` or `.glitter`. This is not enforced by the compiler.
+
+### Command line
+
+To compile a Glitter source file to JavaScript:
+```bash
+node glitter input.gl -o output.js
+```
+
+In this case the compiler is guessed from the output file extension.
+
+Options:
+- `-o, --output <file>`: Specify output file
+- `--keep-comments`: Retain comments in the output (note that not all compilers may support this)
