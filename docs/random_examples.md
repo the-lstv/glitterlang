@@ -1,7 +1,7 @@
 <!-- Note: "js" is used here as a language due to similarity, but the actual language is glitter. There just expectedly isn't a glitter highlighter yet. -->
 
 Hello world with delay
-```js glitter
+```ts glitter
 #async // Async at root
 
 sleep(1s);
@@ -9,7 +9,7 @@ print("Hello world");
 ```
 
 Pipeline operator
-```js glitter
+```ts glitter
 let result = 5
     |> (x) => x * 2
     |> (x) => x + 3;
@@ -29,7 +29,7 @@ let text = "  Glitter Lang  "
 ```
 
 Continuation/reuse arrow syntax
-```js glitter
+```ts glitter
 // This is similar to the pipeline operator, with some major differences:
 // - It does not automatically evaluate functions
 // - It always passes the first value in the chain, not the previous value
@@ -52,7 +52,7 @@ let another = dom.createElement("span")
 ```
 
 Numbers
-```js glitter
+```ts glitter
 const decimal = 12345;          // Decimal
 const hex = 0x1A3F;             // Hexadecimal
 const binary = 0b110101;        // Binary
@@ -71,7 +71,7 @@ const doubleNum:f64 = 2.71828; // Double
 const longNum = 1234567890n;   // BigInt/Long
 ```
 
-```js glitter
+```ts glitter
 // There are also units:
 const duration = 5s;           // Duration (ms, s, m, h, d, w), returns milliseconds
 const size = 10MB;             // DataSize (B, KB, MB, GB, TB, PB), returns bytes
@@ -109,7 +109,7 @@ if constexpr (unit_match<rawDuration, Duration>) {
 ```
 
 Strings
-```js glitter
+```ts glitter
 // There are your typical strings:
 const name = "Glitter"; // Normal string
 const greeting = `Hello, ${name}!`; // Template string
@@ -152,7 +152,7 @@ stringBuffer.equals(BinaryString.from("Hello")); // false
 ```
 
 Try-catch-finally
-```js glitter
+```ts glitter
 // There's the typical try-catch-finally format you probably already know:
 try {
     let result = riskyOperation();
@@ -192,7 +192,7 @@ let result = safeFunction(); // null
 ```
 
 Loops & array iteration
-```js glitter
+```ts glitter
 // Standard while loop
 for (let i = 0; i < 5; i++) {
     print("Iteration:", i);
@@ -253,7 +253,7 @@ const gen = @generateNumbers(5); // @ expands it into a full array
 ```
 
 Ranges
-```js glitter
+```ts glitter
 const range = [1..5];
 print(range); // [1, 2, 3, 4, 5]
 
@@ -265,6 +265,9 @@ for (let i in 10..15) {
     print(i); // 10, 11, 12, 13, 14, 15
 }
 
+// Shorthand
+@5..10 (i) print(i); // 5, 6, 7, 8, 9, 10
+
 // Can also be used in slicing
 const arr = [10, 20, 30, 40, 50];
 const subarr = arr[1..3]; // [20, 30, 40]
@@ -273,17 +276,15 @@ print(subarr);
 // Ranges can also be open
 const openStart = [..3]; // From start to 3
 print(openStart); // [0, 1, 2, 3]
-
-// Shorthand
-@5..10 (i) print(i); // 5, 6, 7, 8, 9, 10
 ```
 
-Memory features
+## Memory features
+### Destructors, ownership model and automatic cleanup
 > [!WARNING]
-> When compiling to JavaScript, destructors are manual, aka if your object goes out of scope, it will not be called. JS does not support this. A good model is: assume the destructor won't be called unless you do, and clean everything you can inside.
-> In general, destructors in JS are useful, but only try to implement them if you know what you're doing and how they behave in this implementation to avoid surprises.
+> When compiling to JavaScript, destructors and destroy state are manual, aka if your object goes out of scope, it will not be called. JS sadly does not support this and has no way to implement it currently. A good model is: assume the destructor won't be called unless you do, and clean everything you can inside.
+> In general, destructors in JS are useful, but only implement them if you know what you're doing and know how they behave in this implementation to avoid surprises. While Glitter tries to make it as clean and predictable as possible, sadly there is no perfect solution here due to the language limitations.
 
-```js glitter
+```ts glitter
 // Destructible classes and ownership
 // The "destructible" keyword enables automatic cleanup features in JavaScript, this will:
 // - Clean up timeouts, intervals, animations/rAF, event listeners, and other registered resources when .destroy
@@ -294,37 +295,48 @@ Memory features
 // - Marks the object as destroyed to prevent further use
 // - If possible, removes references elsewhere (this is not guaranteed, esp. with mixed code)
 
+// Othwise, destructors work as expected in other targets.
+
 destructible class MyClass {
     constructor() {
+        // You can enable automatic tracking, which will automatically track these when created inside this object scope (in the constructor or methods):
+        #auto track <dom, timeout, interval, animation, event_listener>;
+        // or #auto track <*>; - be careful with this as it may track more than you want
+        // auto tracking "dom" will track all dom operations (events, creations, etc.)
+
         // The timeout will be cleaned up automatically when the object is destroyed
         // (see what is supported for automatic cleanup)
-        track timeout (1s) {
-            print("This will not be printed if the object is destroyed before.");
-        }
+        track(timeout (1s) {
+            print("This will only print if the object is still 'alive' within 1 second.");
+        });
 
-        // Use track to track values
-        const div = track document.createElement("div");
+        // Use track() to explicitly track values. (Note that it is not magic; it needs some context. See what is supported.)
+        const div = track(document.createElement("div"));
         document.body -> .on("click", => .appendChild(div));
 
         // And custom destructors
-        const someDestructibleResourceOrFunction = () => print("Custom resource cleaned up!");
-        track someDestructibleResourceOrFunction;
+        track(() => print("Custom resource cleaned up!"));
 
         // If we got something externally that we want to cleanup too, we can track it
         const externalResource = document.createElement("div");
-        track externalResource; // "externalResource" will be removed from the DOM when this object is destroyed
+        track(externalResource); // "externalResource" will be removed from the DOM when this object is destroyed
 
-        // Properties don't need to be explicitly tracked, they are cleaned up automatically
-        this.anotherElement = document.createElement("span");
+        // Not tracked! The reference will be cleared, but the element will stay if something else uses it or if it's connected. Track it explicitly if needed.
+        this.anotherElement = document.querySelector("span"); // or track this.anotherElement = someotherexternalsource;
+
+        // Note; tracking won't do much on primitives (number/string, etc.), but they will work on references:
+        this.someNumber = 42*;
 
         // Release resources manually if needed
-        // release someDestructibleResourceOrFunction
+        // release(externalResource);
+
+        // At the end of destruction, all class properties (including non-tracked ones) are cleared automatically (and so their references) - this does not guarantee cleanup if something else holds references to them.
     }
 
     // Destructor
     // WARNING: When compiling to JavaScript, destructors are only called manually via .destroy()!
     // WARNING: This automatically propagates to superclass destructors!
-    // Note: destroy() is also supported without the destructible keyword, but automatic cleanup features won't apply.
+    // NOTE: destroy() is also supported without the destructible keyword, but automatic cleanup features won't apply.
     destroy() {
         print("Destructor called for " + this.name);
         // Do cleanup here
@@ -338,7 +350,7 @@ obj.destroy();
 obj.name // Error
 obj.destroyed // true; shouldn't be accessed again
 ```
-```js glitter
+```ts glitter
 // Pointer-like references
 let a = 10*;
 
@@ -355,11 +367,11 @@ a // = 20
 b // = 20 - Reference kept
 c // = 10 - Copy unchanged (default for primitives)
 
-// Warning: use very carefully if compiling to JS
+// Warning: use carefully if compiling to JS
 ```
 
 Class features and syntax sugar
-```js glitter
+```ts glitter
 class Example {
     // Constructor shorthand; we can omit "constructor"
     (value) {
@@ -383,14 +395,14 @@ try Example.staticValue = 200; // Error: cannot modify readonly property
 let sub = new Example.SubClass("Hello");
 print(sub.subValue); // Hello
 
-base class Base {
+abstract class Base {
     (=name);
     greet() { print("Hello, " + this.name); }
 }
 
 class Derived extends Base { }
 
-try new Base(); // Error: cannot instantiate base class
+try new Base(); // Error: cannot instantiate abstract class
 
 let d = new Derived("Glitter");
 d.greet(); // Hello, Glitter
@@ -433,10 +445,41 @@ obj.printInfo();
 // Array values: 1 2 5
 ```
 
+### Comptime features
+```ts glitter
+// Sometimes you want something decided at compile time rather than runtime.
+// Glitter provides several features for this:
+// Compile-time constants, conditional compilation, and compile-time functions.
+
+// Compile-time constants
+const PI = comptime 3.14159;
+
+// Conditional compilation
+if constexpr (PI > 3) {
+    // This branch is included at compile time and inlined (so the result code only has the print statement)
+    print("PI is greater than 3");
+} else {
+    // This branch is completely removed at compile time
+    print("PI is not greater than 3");
+}
+
+// Compile-time functions
+fn comptimeSquare(x:comptime number) => x * x;
+let squaredValue = comptimeSquare(5); // Turns to a static "25"
+print("Squared value:", squaredValue);
+
+// What is probably more useful is external constants:
+if constexpr (#env.mode == "production") {
+    print("Production mode");
+} else {
+    print("Development mode");
+}
+```
+
 JS Interop
 
 Glitter often compiles to JavaScript, so you can interoperate with JS code directly (at runtime they are the same, so any library or tool will be compatible, except for Glitter-only compiletime features).
-```js glitter
+```ts glitter
 if(!available<JavaScript>) {
     throw "JavaScript interop is only available when compiling to JavaScript.";
 }
@@ -454,7 +497,7 @@ print("2 + 3 =", fn(2, 3)); // Outputs: 2 + 3 = 5
 global window = JavaScript.global;
 print("Current URL:", window.location.href);
 
-// Or enter the global scope entirely:
+// Or enter the global scope entirely (careful):
 using JavaScript.global;
 print("User Agent:", navigator.userAgent);
 
@@ -468,12 +511,12 @@ JavaScript.export({
 ```js
 // In JS, you can also access Glitter code.
 const Glitter = require('./glitter.js');
-const fn = Glitter.eval("fn (x, y) x + y;");
+const fn = Glitter.eval("fn add(x, y) x + y;");
 console.log("4 + 5 =", fn(4, 5)); // Outputs: 4 + 5 = 9
 ```
 
 DOM manipulation
-```js glitter
+```ts glitter
 import glitter:dom;
 
 // The API is the same as a typical DOM API, with some small differences and optimizations.
