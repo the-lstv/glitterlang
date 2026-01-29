@@ -70,6 +70,10 @@ class EditorView extends View {
             });
             const t3 = performance.now();
 
+            console.log(tokens);
+            console.log(ast);
+            console.log(this.compiled);
+
             if (window.prettier && window.prettierPlugins) {
                 this.compiled = prettier.format(this.compiled, {
                     parser: "babel",
@@ -79,10 +83,6 @@ class EditorView extends View {
                     tabWidth: 4,
                 });
             }
-
-            console.log(tokens);
-            console.log(ast);
-            console.log(this.compiled);
 
             events.quickEmit("glitter:ast-update", { ast, tokensCount: tokens.length });
             events.quickEmit("glitter:output-update", { text: this.compiled });
@@ -170,18 +170,19 @@ class LogsView extends View {
 
 class ASTView extends View {
     constructor() {
+        let astTree;
         super({
             name: "ASTView",
             title: "AST Explorer",
             container: LS.Create({
                 class: "ast-panel",
                 inner: [
-                    { tag: "div", id: "ast-tree" }
+                    (astTree = LS.Create({ tag: "div" }))
                 ]
             })
         });
 
-        this.astTree = this.container.querySelector("#ast-tree");
+        this.astTree = astTree;
 
         this.handleUpdate = (data) => {
             const { ast, tokensCount } = data;
@@ -228,6 +229,10 @@ class ASTView extends View {
     }
 
     createLeaf(value, label = "") {
+        if(label === "type") {
+            return;
+        }
+
         const leaf = document.createElement("div");
         leaf.className = "tree-leaf";
         const formatted = typeof value === "string" ? `"${value}"` : String(value);
@@ -258,7 +263,9 @@ class ASTView extends View {
         branch.appendChild(summary);
 
         Object.keys(node).forEach((key) => {
-            branch.appendChild(this.createTreeNode(node[key], key));
+            const child = this.createTreeNode(node[key], key);
+            if(!child) return;
+            branch.appendChild(child);
         });
 
         return branch;
@@ -275,6 +282,10 @@ class ASTView extends View {
     }
 
     createTreeNode(value, label = "") {
+        if(label === "span") {
+            return; // Temporary
+        }
+
         if (value === null || typeof value !== "object") {
             return this.createLeaf(value, label);
         }
@@ -296,6 +307,7 @@ class ASTView extends View {
 
         Object.keys(value).forEach((key) => {
             const child = this.createTreeNode(value[key], key);
+            if(!child) return;
             branch.appendChild(child);
         });
 

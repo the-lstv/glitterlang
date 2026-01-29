@@ -135,6 +135,74 @@ const lang = {
         "char"
     ]),
 
+    // Spec defined global constants and functions, every backend may implement these differently, but accurately
+    constants: new Map([
+        ["π", "3.141592653589793"],
+        ["Π", "3.141592653589793"],
+        ["PI", "3.141592653589793"],
+        ["E", "2.718281828459045"],
+        ["τ", "6.283185307179586"],
+        ["TAU", "6.283185307179586"],
+        ["SQRT2", "1.4142135623730951"],
+        ["LOG2E", "1.4426950408889634"],
+        ["EPSILON", "2.220446049250313e-16"],
+
+        /**
+         * Clamps a number between min and max
+         */
+        ["clamp", { ns: "Math", global: true }],
+
+        /**
+         * Deep clones an object or array
+         */
+        ["deepClone", { ns: "Value", global: true }],
+
+        /**
+         * Deeply compares two values for equality
+        */
+        ["deepEqual", { ns: "Value", global: true }],
+
+        /**
+         * Prints to console or stdout
+        */
+        ["print", { ns: "Console", global: true }],
+
+        /**
+         * Sleeps for a given number of milliseconds (in JS this is either via setTimeout or await)
+        */
+        ["sleep", { ns: "Time", global: true }]
+    ]),
+
+    // Literals can have units (e.g. 5ms, 10s, 3h, 2d), which maps to their base value (eg. milliseconds)
+    // These must be used explicitly (eg. fn (duration: Duration) {})
+    units: new Map([
+        ["ms", { ns: "Duration", multiplier: 1, base: true }],
+        ["s",  { ns: "Duration", multiplier: 1000 }],
+        ["m",  { ns: "Duration", multiplier: 60000 }],
+        ["h",  { ns: "Duration", multiplier: 3600000 }],
+        ["d",  { ns: "Duration", multiplier: 86400000 }],
+        ["w",  { ns: "Duration", multiplier: 604800000 }],
+
+        // Percentages have some extra restrictions/special handling.
+        // Eg. 1 * 50% = 0.5, 50% + 25% = 75%, but you cannot do 50% + 0.5
+        ["%", { ns: "Percentage", multiplier: 0.01, percentage: true }],
+
+        ["B", { ns: "DataSize", multiplier: 1, base: true }],
+        ["KB", { ns: "DataSize", multiplier: 1024 }],
+        ["MB", { ns: "DataSize", multiplier: 1048576 }],
+        ["GB", { ns: "DataSize", multiplier: 1073741824 }],
+        ["TB", { ns: "DataSize", multiplier: 1099511627776 }],
+        ["PB", { ns: "DataSize", multiplier: 1125899906842624 }],
+
+        ["Hz", { ns: "Frequency", multiplier: 1, base: true, invertsOf: "s" }],
+        ["kHz", { ns: "Frequency", multiplier: 1000 }],
+        ["MHz", { ns: "Frequency", multiplier: 1000000 }],
+        ["GHz", { ns: "Frequency", multiplier: 1000000000 }],
+        ["THz", { ns: "Frequency", multiplier: 1000000000000 }],
+        ["PPM", { ns: "Frequency", multiplier: 0.000001 }],
+        ["PPB", { ns: "Frequency", multiplier: 0.000000001 }],
+    ]),
+
     // Operator tokens
     operators: new Set([
         // Arithmetic
@@ -169,8 +237,13 @@ const lang = {
         // Other (delete is an operator in JS for some reason)
         "delete", "void",
 
-        // Loops
-        "@", "@@", "@@@",
+        // Loops / iteration
+        "@", "@@", "@@@", "@->", "@@->",
+
+        // Pipeline operators
+        "|>", "<|",
+
+        "~>", "<~"
     ]),
 
     // Operator precedence table (higher is tighter binding)
@@ -215,6 +288,7 @@ const lang = {
     TOKEN_CLOSING_BRACE: "closing_brace",
     TOKEN_SEMICOLON: "semicolon",
     TOKEN_NL: "newline",
+    TOKEN_UNIT: "unit",
     // TOKEN_IDENTIFIER: 0,
     // TOKEN_NUMBER: 1,
     // TOKEN_STRING: 2,
@@ -226,6 +300,8 @@ const lang = {
     // TOKEN_OPENING_BRACE: 8,
     // TOKEN_CLOSING_BRACE: 9,
     // TOKEN_SEMICOLON: 10,
+    // TOKEN_NL: 11,
+    // TOKEN_UNIT: 12,
 
     // AST Node Types
     TYPE_DECLARATION: "DECLARATION",
@@ -252,7 +328,8 @@ const lang = {
     // TYPE_PROGRAM: 10,
 }
 
-lang.OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
+lang._OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
+lang._UNITCHARS = new Set([...lang.units.keys()].map(unit => unit.charCodeAt(0)));
 
 /**
  * Token class representing a lexical token
@@ -366,9 +443,81 @@ class State {
         return value;
     }
 
+    _describeToken(token) {
+        if(!token) return "end of input";
+
+        if(token.type === lang.TOKEN_OPENING_BRACE || token.type === lang.TOKEN_CLOSING_BRACE) {
+            return "'" + token.value + "'";
+        }
+
+        if(token.type === lang.TOKEN_SEMICOLON) {
+            return "';'";
+        }
+
+        if(token.type === lang.TOKEN_NL) {
+            return "newline";
+        }
+
+        /**precomp*/const name = {
+            [lang.TOKEN_OPERATOR]: "operator",
+            [lang.TOKEN_IDENTIFIER]: "identifier",
+            [lang.TOKEN_NUMBER]: "number",
+            [lang.TOKEN_STRING]: "string",
+            [lang.TOKEN_LITERAL]: "literal",
+            [lang.TOKEN_COMMENT]: "comment",
+            [lang.TOKEN_DECLARATION]: "declarator",
+            [lang.TOKEN_KEYWORD]: "keyword",
+        }
+
+        if(name[token.type]) {
+            return `${name[token.type]} '${this._cutValue(token.value)}'`;
+        }
+
+        if(!token.value) {
+            return `type '${token.type}'`;
+        }
+
+        return `type '${token.type}' with value '${token.value}'`;
+    }
+
     _tokenInfo(token) {
         if (!token) return "";
-        return `\n - near ${token.type} '${this._cutValue(token.value)}' (start=${token.start}, end=${token.end})`;
+        return `\n - near ${this._describeToken(token)} (start=${token.start}, end=${token.end})`;
+    }
+}
+
+class Span {
+    constructor({ start, end, line, column } = {}) {
+        this.start = start;
+        this.end = end;
+        this.line = line;
+        this.column = column;
+    }
+
+    to(token) {
+        this.end = token.end;
+        return this;
+    }
+
+    /**
+     * Create a Span from a set of tokens
+     * @param {...Token} tokens The tokens (or Span) to create the span from (takes first and last)
+     * @returns {Span} The created Span
+     */
+    static from() {
+        if(arguments.length === 0) {
+            return new Span();
+        }
+
+        const startToken = arguments[0];
+        const endToken = arguments[arguments.length - 1] || arguments[0];
+
+        return new Span({
+            start: startToken.start,
+            end: endToken.end,
+            line: startToken.line,
+            column: startToken.column
+        });
     }
 }
 
@@ -602,7 +751,7 @@ function continueLexing(state) {
             }
 
             // Operators
-            if(lang.OPCHARS.has(char)) {
+            if(lang._OPCHARS.has(char)) {
                 let startPos = state.position;
                 let opStr = String.fromCharCode(char);
                 let nextChar = state.sourceView.charCodeAt(state.position + 1);
@@ -756,65 +905,6 @@ class ParserState extends State {
         }
 
         return this.isEnd();
-    }
-
-    _describeToken(token) {
-        if(!token) return "end of input";
-
-        if(token.type === lang.TOKEN_SEMICOLON || token.type === lang.TOKEN_OPENING_BRACE || token.type === lang.TOKEN_CLOSING_BRACE) {
-            return "'" + token.value + "'";
-        }
-
-        if(token.type === lang.TOKEN_NL) {
-            return "newline";
-        }
-
-        /**precomp*/const name = {
-            [lang.TOKEN_OPERATOR]: "operator",
-            [lang.TOKEN_IDENTIFIER]: "identifier",
-            [lang.TOKEN_NUMBER]: "number",
-            [lang.TOKEN_STRING]: "string",
-            [lang.TOKEN_LITERAL]: "literal",
-            [lang.TOKEN_COMMENT]: "comment",
-            [lang.TOKEN_DECLARATION]: "declarator",
-            [lang.TOKEN_KEYWORD]: "keyword",
-        }
-
-        if(name[token.type]) {
-            return `${name[token.type]} '${this._cutValue(token.value)}'`;
-        }
-
-        return `type '${token.type}' with value '${token.value}'`;
-    }
-}
-
-class Span {
-    constructor({ start, end, line, column } = {}) {
-        this.start = start;
-        this.end = end;
-        this.line = line;
-        this.column = column;
-    }
-
-    /**
-     * Create a Span from a set of tokens
-     * @param {...Token} tokens The tokens (or Span) to create the span from (takes first and last)
-     * @returns {Span} The created Span
-     */
-    static from() {
-        if(arguments.length === 0) {
-            return new Span();
-        }
-
-        const startToken = arguments[0];
-        const endToken = arguments[arguments.length - 1] || arguments[0];
-
-        return new Span({
-            start: startToken.start,
-            end: endToken.end,
-            line: startToken.line,
-            column: startToken.column
-        });
     }
 }
 
