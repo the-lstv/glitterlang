@@ -452,21 +452,22 @@ obj.printInfo();
 // Compile-time constants, conditional compilation, and compile-time functions.
 
 // Compile-time constants
-const PI = comptime 3.14159;
+const 2PI = constexpr<3.14159 * 2>;
 
 // Conditional compilation
-if constexpr (PI > 3) {
+if constexpr (2PI > 3) {
     // This branch is included at compile time and inlined (so the result code only has the print statement)
-    print("PI is greater than 3");
+    print("2 PI is greater than 3");
 } else {
     // This branch is completely removed at compile time
-    print("PI is not greater than 3");
+    print("2 PI is not greater than 3");
 }
 
 // Compile-time functions
-fn comptimeSquare(x:comptime number) => x * x;
+comptime fn comptimeSquare(x:number) => x * x;
 let squaredValue = comptimeSquare(5); // Turns to a static "25"
 print("Squared value:", squaredValue);
+// At runtime, comptimeSquare does not exist.
 
 // What is probably more useful is external constants:
 if constexpr (#env.mode == "production") {
@@ -474,9 +475,67 @@ if constexpr (#env.mode == "production") {
 } else {
     print("Development mode");
 }
+
+// Available external constants:
+// #env - Environment variables
+// #build - Build configuration (eg. version, date, etc.)
+// #compiler - Compiler configuration (eg. version, options, etc.)
+// #data - Custom data passed to the compiler (eg. build-time metadata)
 ```
 
-JS Interop
+### Sandboxed scopes
+```ts glitter
+// You usually don't just run your own code at the root level; you may run all sorts of code from various places and you may want to ensure it doesn't leak into your root scope. Or simply want to modularize things better.
+// Glitter provides a way to isolate the root scope easily.
+
+// Sandboxes exist as separate root scope.
+// You can also auto sandbox an entire module by placing #sandbox at the top.
+
+global x = 5;
+
+const x = sandbox {
+    try x; // Error: x is not defined
+
+    // This code runs in a separate root scope.
+    global x = 10; // This x is local to the sandbox
+    print("Sandbox x:", x);
+
+    export x; // Export x to the outside world
+}
+
+// WARNING: This does not provide any magic execution security/VM/isolate; it only boxes resource access.
+// For complete isolation, use proper VMs/isolates provided by the target environment.
+// Bad code can still do bad things.
+
+// You can selectively provide values to the sandbox:
+sandbox (x = x) {
+    print("Sandbox with provided x:", x); // 5
+    x = 20; // Modifies local x only
+}
+
+// Example: getter access
+sandbox ({ get secret() => "Top Secret" }) {
+    print("Accessing secret:", secret);
+    secret = ""; // Error: cannot modify readonly property
+}
+
+// Example safe eval (JavaScript only)
+import glitter as Glitter, SandboxFrame;
+
+const compiled = Glitter.compile("unsafe code");
+const frame = new SandboxFrame();
+
+frame.catch((error) => {
+    print("Sandbox error:", error);
+});
+
+const result = frame.run(compiled); // Runs in a sandboxed environment
+frame.destroy(); // Clean up
+
+print("Sandbox result:", result);
+```
+
+### JS Interop
 
 Glitter often compiles to JavaScript, so you can interoperate with JS code directly (at runtime they are the same, so any library or tool will be compatible, except for Glitter-only compiletime features).
 ```ts glitter
@@ -515,7 +574,20 @@ const fn = Glitter.eval("fn add(x, y) x + y;");
 console.log("4 + 5 =", fn(4, 5)); // Outputs: 4 + 5 = 9
 ```
 
-DOM manipulation
+### Runtime eval and language patching (JavaScript only)
+```ts glitter
+// You probably shouldn't, but you can eval Glitter code at runtime by including the compiler in your build.
+import glitter;
+
+const code = `
+    fn multiply(a, b) => a * b;
+    multiply(6, 7);
+`;
+
+print("6 * 7 =", Glitter.eval(code)); // Outputs: 6 * 7 = 42
+```
+
+### DOM manipulation
 ```ts glitter
 import glitter:dom;
 
