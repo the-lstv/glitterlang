@@ -8,20 +8,13 @@ sleep(1s);
 print("Hello world");
 ```
 
-Iterating over an array
-```js glitter
-// Iterating over an array (shorthand syntax)
-let arr = [1, 2, 3, 4, 5];
-
-@arr (a) print(a);
-```
-
 Pipeline operator
 ```js glitter
 let result = 5
     |> (x) => x * 2
     |> (x) => x + 3;
-print(result); // Outputs 13
+    |> . - 4
+print(result); // Outputs 9
 
 // Whatever the last expression returned is the next input.
 
@@ -37,13 +30,18 @@ let text = "  Glitter Lang  "
 
 Continuation/reuse arrow syntax
 ```js glitter
+// This is similar to the pipeline operator, with some major differences:
+// - It does not automatically evaluate functions
+// - It always passes the first value in the chain, not the previous value
+// - Returning is optional, but ends the chain and returns that value.
+
 let something = dom.createElement("div")
     -> .id = "my-div"
     -> .className = "container"
     -> someFunction(.)
     -> .append("Hello, Glitter!");
 
-// NOTE: Unlike the pipeline operator, "->" does not pass the previous value; "." will always refer to the first value in the chain, and is lost when the chain ends. That is the main difference.
+// NOTE: Unlike the pipeline operator, "->" does not pass the previous value; "." will always refer to the first value in the chain.
 
 document.body.appendChild(something);
 
@@ -66,9 +64,10 @@ const underscores = 1_000_000;  // Underscores for readability (they are ignored
 // Special cases: .1 (0.1) and 1. (1.0) are also valid
 
 // Numeric variables can have type suffixes/prefixes:
-u8 intNum = 42;                // Integer (i16/32/64, u8/16/32/64)
-float floatNum2 = 3.14;        // Float (or 3.14f)
-double doubleNum = 2.71828;    // Double
+// (their use depends on context; you may or may not need them)
+const intNum:u8 = 42;          // Integer (signed i8/i16/32/64/128, unsigned u8/16/32/64/128)
+const floatNum2:f32 = 3.14;    // Float (or 3.14f)
+const doubleNum:f64 = 2.71828; // Double
 const longNum = 1234567890n;   // BigInt/Long
 ```
 
@@ -79,11 +78,16 @@ const size = 10MB;             // DataSize (B, KB, MB, GB, TB, PB), returns byte
 const frequency = 60Hz;        // Frequency (Hz, kHz, MHz, GHz), returns hertz
 const percentage = 75%;        // Percentage, returns a float (0.75)
 
-// Note that these have to be explicitly typed if used anywhere else:
-// That is so (1) the function knows what unit it expects, and (2) to avoid doing "setTimeout(fn, 5MB)".
-fn wrong(number) print(`Duration: ${duration}ms`);
-wrong(5s); // Error: cannot infer type
+// Units resolve into numbers at compile time.
 
+// Note that they have to be explicitly typed when passed anywhere else, even if the target accepts numbers:
+// That is so (1) the function knows what it expects (eg. ms vs seconds), and (2) to avoid something like "setTimeout(fn, 5MB)".
+
+// Wrong example:
+fn wrong(number) print(`Duration: ${duration}ms`);
+wrong(5s); // Error: cannot infer unit type
+
+// Correct example:
 fn correct(duration:Duration) print(`Duration: ${duration}ms`);
 correct(5s);
 
@@ -93,10 +97,10 @@ correct(5s);
 1MB + 5s; // Error: incompatible types
 
 // Careful: Units are only resolved at compile time - at runtime, they are just numbers.
-// 10s === 10000 === 1000000%
+// 10s === 10000 === 1000000% === 10000B
 const rawDuration = 10s; // Equal to 10000
 
-// You can check for units with a branch, but only if it is decided at compile time.
+// You can check for units with a branch, but only at compile time.
 // If false, the branch is removed.
 // unit_match<T, UnitType> is a special compile-time function
 if constexpr (unit_match<rawDuration, Duration>) {
@@ -112,8 +116,9 @@ const greeting = `Hello, ${name}!`; // Template string
 const greeting2 = $"Hello, {name}!"; // Alternative template string
 
 
+// A JavaScript specific feature:
 
-// Glitter also supports "binary" ("real") mutable strings in JS (as a wrapper around Uint8Array), that behave closer to proper strings in lower-level languages:
+// Glitter supports "real" mutable strings in JS (as a wrapper around Uint8Array), that behave closer to proper strings in lower-level languages:
 
 const stringBuffer = b"Hello!"; // Or BinaryString.from("Hello!")
 print(stringBuffer.length); // 6
@@ -128,14 +133,22 @@ print(stringBuffer.toString()); // "Hallo!"
 // Zero-copy string slicing:
 stringBuffer.subarray(0, 3); // Points to the original buffer; like a StringView
 
+// Copy slicing:
+stringBuffer.slice(0, 3); // New BinaryString with "Hal"
+
 // You can also create binary strings from String/Uint8Array/ArrayBuffer/Buffer:
 BinaryString.from(new Uint8Array([87, 111, 114, 108, 100]));
 
 // Concatenation:
 BinaryString.concat([stringBuffer, BinaryString.from(" World")]).toString(); // "Hallo World"
 
-// Don't overuse these; they add overhead and behave differently from normal strings. Only use them when you know you need them.
-// They are useful for performance-critical code, memory efficiency, encoding predictability, frequent character mutations, or working with existing buffers.
+// Compare:
+stringBuffer.equals(BinaryString.from("Hello")); // false
+// (Since there is no standard way to do this, under the hood this may do different things based on the environment (Node/Browser) and string size (results should be consistent, but performance may vary)).
+
+// Don't overuse these; they add creation and allocation overhead and behave differently from normal strings.
+// Only use them when you know they benefit you (otherwise default to regular strings).
+// They are useful for performance-critical code, on servers, for memory efficiency, encoding predictability, large strings, frequent character mutations, or working with existing buffers.
 ```
 
 Try-catch-finally
