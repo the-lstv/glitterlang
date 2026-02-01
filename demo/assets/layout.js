@@ -1,6 +1,3 @@
-
-
-
 const LAYOUT_SCHEMA_PRESETS = {
     /**
      * |   | | |
@@ -144,6 +141,10 @@ class View extends LS.EventEmitter {
         this.title = title || null;
 
         this.currentSlot = null;
+    }
+
+    get isVisible() {
+        return (this.container && this.container.isConnected && this.currentSlot && this.container.parentElement === this.currentSlot.container);
     }
 
     // Subclasses should override with their own destruction logic, but DON'T forget to call super.destroy()

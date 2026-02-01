@@ -587,11 +587,13 @@ const code = `
 print("6 * 7 =", Glitter.eval(code)); // Outputs: 6 * 7 = 42
 ```
 
-### DOM manipulation
-```ts glitter
-import glitter:dom;
+### DOM manipulation (Using normal DOM API)
+Glitter offsers two ways to manipulate DOM: the standard DOM API, and a more ergonomic Glitter DOM API.
 
-// The API is the same as a typical DOM API, with some small differences and optimizations.
+```ts glitter
+import browser:dom;
+
+// This API is the standard DOM API and is backwards compatible, with just some minor (non-breaking) upgrades and optimizations.
 
 // Get the document object
 global document = dom.getDocument() || throw "No document object available";
@@ -607,3 +609,51 @@ div.style.padding = "10px";
 div.append("Hello, Glitter DOM!");
 document.body.append(div);
 ```
+
+### DOM Manipulation (Glitter DOM API)
+```ts glitter
+// The Glitter DOM API provides a more ergonomic way to work with the DOM in Glitter.
+import glitter:dom;
+
+global doc = dom.getDocument() || throw "No document object available";
+
+// HTML syntax is allowed directly:
+let div = <div id="my-div" class="container">Hello, Glitter DOM!</div>;
+
+div.style({
+    backgroundColor: "lightblue",
+    padding: "10px"
+});
+
+div.on("click", => {
+    alert("Div clicked!");
+});
+
+doc.body.append(div);
+```
+
+### Operator overloading
+You can overload binary operators in your classes by defining special methods.
+
+```ts glitter
+class Vector2D {
+    (=x:number = 0, =y:number = 0);
+
+    // Overload the "+" operator
+    overload + (other:Vector2D) {
+        return new Vector2D(this.x + other.x, this.y + other.y);
+    }
+
+    // Overload the "-" operator
+    overload - (other:Vector2D) {
+        return new Vector2D(this.x - other.x, this.y - other.y);
+    }
+}
+
+let v1 = new Vector2D(2, 3);
+let v2 = new Vector2D(4, 5);
+
+let v3 = v1 + v2; // Uses overloaded "+" operator
+
+print(`v3: (${v3.x}, ${v3.y})`); // Outputs: v3: (6, 8)
+``` 

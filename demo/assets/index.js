@@ -34,7 +34,7 @@ class EditorView extends View {
         this.compileBtn.removeEventListener("click", this.handleCompile);
         this.runBtn.removeEventListener("click", this.handleRun);
         events.off("glitter:set-code", this.handleSetCode);
-        super.destroy && super.destroy();
+        super.destroy();
     }
 
     async compile() {
@@ -73,16 +73,6 @@ class EditorView extends View {
             console.log(tokens);
             console.log(ast);
             console.log(this.compiled);
-
-            if (window.prettier && window.prettierPlugins) {
-                this.compiled = prettier.format(this.compiled, {
-                    parser: "babel",
-                    plugins: prettierPlugins,
-                    semi: true,
-                    singleQuote: false,
-                    tabWidth: 4,
-                });
-            }
 
             events.quickEmit("glitter:ast-update", { ast, tokensCount: tokens.length });
             events.quickEmit("glitter:output-update", { text: this.compiled });
@@ -148,7 +138,7 @@ class LogsView extends View {
         events.off("glitter:log", this.handleLog);
         events.off("glitter:logs-clear", this.handleClear);
         events.off("glitter:metrics-clear", this.handleMetricsClear);
-        super.destroy && super.destroy();
+        super.destroy();
     }
 
     clearLogs() {
@@ -185,6 +175,8 @@ class ASTView extends View {
         this.astTree = astTree;
 
         this.handleUpdate = (data) => {
+            if(!this.isVisible) return;
+
             const { ast, tokensCount } = data;
             if(!ast) {
                 this.renderAST(null);
@@ -202,7 +194,7 @@ class ASTView extends View {
 
     destroy() {
         events.off("glitter:ast-update", this.handleUpdate);
-        super.destroy && super.destroy();
+        super.destroy();
     }
 
     renderAST(ast) {
@@ -331,6 +323,21 @@ class OutputView extends View {
         this.output = this.container.querySelector("#output");
 
         this.handleUpdate = (data) => {
+            if(!this.isVisible) return;
+
+            if (window.prettier && window.prettierPlugins) {
+                if(!data._prettier) data.text = prettier.format(data.text, {
+                    parser: "babel",
+                    plugins: prettierPlugins,
+                    semi: true,
+                    singleQuote: false,
+                    tabWidth: 4,
+                });
+
+                // If there are multiple outputviews, prevent re-formatting
+                data._prettier = true;
+            }
+
             const text = data.text;
             this.output.textContent = text.length > 10000 ? text.slice(0, 10000) + "..." : text;
         };
@@ -340,7 +347,7 @@ class OutputView extends View {
 
     destroy() {
         events.off("glitter:output-update", this.handleUpdate);
-        super.destroy && super.destroy();
+        super.destroy();
     }
 }
 
