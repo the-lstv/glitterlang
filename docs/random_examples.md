@@ -60,6 +60,7 @@ const octal = 0o7654;           // Octal
 const floatNum = 3.14159;       // Floating-point
 const sciNum = 1.23e4;          // Scientific notation
 const underscores = 1_000_000;  // Underscores for readability (they are ignored)
+const shorthandUnits = 1m;      // Large number notation for 1 million (1_000_000)
 
 // Special cases: .1 (0.1) and 1. (1.0) are also valid
 
@@ -73,14 +74,15 @@ const longNum = 1234567890n;   // BigInt/Long
 
 ```ts glitter
 // There are also units:
+const numbers = 1k             // Large numbers (k, m, g, t, p)
 const duration = 5s;           // Duration (ms, s, m, h, d, w), returns milliseconds
-const size = 10MB;             // DataSize (B, KB, MB, GB, TB, PB), returns bytes
+const size = 10MB;             // DataSize (B, KiB, MiB, GiB, TiB, PiB, KB, MB, GB, TB, PB), returns bytes
 const frequency = 60Hz;        // Frequency (Hz, kHz, MHz, GHz), returns hertz
 const percentage = 75%;        // Percentage, returns a float (0.75)
 
 // Units resolve into numbers at compile time.
 
-// Note that they have to be explicitly typed when passed anywhere else, even if the target accepts numbers:
+// Note that they have to be explicitly typed (with the exception of large number notation) when passed anywhere else, even if the target accepts numbers:
 // That is so (1) the function knows what it expects (eg. ms vs seconds), and (2) to avoid something like "setTimeout(fn, 5MB)".
 
 // Wrong example:
@@ -93,11 +95,11 @@ correct(5s);
 
 1m + 30s; // ok
 2GB - 500MB; // ok
-50% * 1GB; // ok (512MB)
+50% * 1GB; // ok (500MB)
 1MB + 5s; // Error: incompatible types
 
 // Careful: Units are only resolved at compile time - at runtime, they are just numbers.
-// 10s === 10000 === 1000000% === 10000B
+// 10s === 10000 === 1000000% === 10000B === 10k
 const rawDuration = 10s; // Equal to 10000
 
 // You can check for units with a branch, but only at compile time.

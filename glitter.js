@@ -188,11 +188,17 @@ const lang = {
         ["%", { ns: "Percentage", multiplier: 0.01, percentage: true }],
 
         ["B", { ns: "DataSize", multiplier: 1, base: true }],
-        ["KB", { ns: "DataSize", multiplier: 1024 }],
-        ["MB", { ns: "DataSize", multiplier: 1048576 }],
-        ["GB", { ns: "DataSize", multiplier: 1073741824 }],
-        ["TB", { ns: "DataSize", multiplier: 1099511627776 }],
-        ["PB", { ns: "DataSize", multiplier: 1125899906842624 }],
+        ["KiB", { ns: "DataSize", multiplier: 1024 }],
+        ["KiB", { ns: "DataSize", multiplier: 1024 }],
+        ["MiB", { ns: "DataSize", multiplier: 1048576 }],
+        ["GiB", { ns: "DataSize", multiplier: 1073741824 }],
+        ["TiB", { ns: "DataSize", multiplier: 1099511627776 }],
+        ["PiB", { ns: "DataSize", multiplier: 1125899906842624 }],
+        ["KB", { ns: "DataSize", multiplier: 1000 }],
+        ["MB", { ns: "DataSize", multiplier: 1000000 }],
+        ["GB", { ns: "DataSize", multiplier: 1000000000 }],
+        ["TB", { ns: "DataSize", multiplier: 1000000000000 }],
+        ["PB", { ns: "DataSize", multiplier: 1000000000000000 }],
 
         ["Hz", { ns: "Frequency", multiplier: 1, base: true, invertsOf: "s" }],
         ["kHz", { ns: "Frequency", multiplier: 1000 }],
@@ -201,6 +207,12 @@ const lang = {
         ["THz", { ns: "Frequency", multiplier: 1000000000000 }],
         ["PPM", { ns: "Frequency", multiplier: 0.000001 }],
         ["PPB", { ns: "Frequency", multiplier: 0.000000001 }],
+
+        ["k", { ns: "Number", multiplier: 1000 }],
+        ["m", { ns: "Number", multiplier: 1000000 }],
+        ["g", { ns: "Number", multiplier: 1000000000 }],
+        ["t", { ns: "Number", multiplier: 1000000000000 }],
+        ["p", { ns: "Number", multiplier: 1000000000000000 }],
     ]),
 
     // Operator tokens
