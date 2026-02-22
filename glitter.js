@@ -75,12 +75,12 @@ const lang = {
         return char1 === 47 && char2 === 42; // /*
     },
 
-    // We use indexOf for comments because it's much faster
+    // We use indexOf for comments because it's faster in JS
     SLCommentEnd: "\n",
     // MLCommentEnd: "*/",
 
     SLCommentEndCharCode: 10, // \n
-    
+
     // But for multiline comments we have to keep line and column count, so no optimization :(
     isMLCommentEnd(char1, char2) {
         return char1 === 42 && char2 === 47; // */
@@ -94,6 +94,7 @@ const lang = {
         "let",
         "const",
         "global",
+        "local",
 
         "function",
         "fn",
@@ -116,7 +117,7 @@ const lang = {
         "break", "continue", "return", "exclude",
         "try", "catch", "finally",
         "throw",
-        "async", "await",
+        "async", "await", "inline", "comptime",
         "new", "extends", "private", "public", "protected", "static", "destructible",
         "this",
         "in",
@@ -327,18 +328,34 @@ const lang = {
     TYPE_BINARY_OP: "BINARY_OP",
     TYPE_BLOCK_STATEMENT: "BLOCK_STATEMENT",
     TYPE_PROGRAM: "PROGRAM",
-    // TYPE_DECLARATION: 0,
-    // TYPE_FUNCTION: 1,
-    // TYPE_IDENTIFIER: 2,
-    // TYPE_LITERAL: 3,
-    // TYPE_EXPRESSION: 4,
-    // TYPE_EXPRESSION_STATEMENT: 5,
-    // TYPE_STATEMENT: 6,
-    // TYPE_UNARY_OP: 7,
-    // TYPE_BINARY_OP: 8,
-    // TYPE_BLOCK_STATEMENT: 9,
-    // TYPE_PROGRAM: 10,
+    TYPE_ENUM_DECLARATION: "ENUM_DECLARATION",
+    TYPE_CLASS_DECLARATION: "CLASS_DECLARATION",
+    TYPE_CALL_EXPRESSION: "CALL_EXPRESSION",
+
+    // Primitive value types (not the same as regular types)
+    TYPE_VALUE: "VALUE",
+    TYPE_NUMBER: "NUMBER",
+    TYPE_STRING: "STRING",
+    TYPE_BOOLEAN: "BOOLEAN",
+    TYPE_NULL: "NULL",
+    TYPE_UNDEFINED: "UNDEFINED",
 }
+
+const util = {
+    constructValue(value) {
+        switch(typeof value) {
+            case "string": return { type: lang.TYPE_LITERAL, value, typeOf: "string" };
+            case "number": return { type: lang.TYPE_LITERAL, value, typeOf: "number" };
+            case "boolean": return { type: lang.TYPE_LITERAL, value, typeOf: "boolean" };
+            case "object": {
+                if(value === null) return { type: lang.TYPE_LITERAL, value, typeOf: "null" };
+                // if(Array.isArray(value)) {}
+            }
+        }
+        if(value === undefined) return { type: lang.TYPE_LITERAL, value, typeOf: "undefined" };
+        throw new Error(`Unsupported literal type: ${typeof value}`);
+    }
+};
 
 lang._OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
 lang._UNITCHARS = new Set([...lang.units.keys()].map(unit => unit.charCodeAt(0)));
@@ -420,14 +437,14 @@ class State {
         (typeof this.onWarn === "function" ? this.onWarn : console.warn)(`${message}${locationStr}${tokenInfo}`);
     }
 
-    error(message, type) {
+    error(message, type, hard = true) {
         const loc = this.getLocationInfo();
         const locationStr = loc.line || loc.column ? ` at line ${loc.line}:${loc.column}` : "";
         const tokenInfo = this._tokenInfo(loc.token);
         const full = `${message}${locationStr}${tokenInfo}`;
         const error = new (type || Error)(full);
         if(typeof this.onError === "function") this.onError(error);
-        throw error;
+        if(hard) throw error;
     }
 
     getLocationInfo() {
@@ -506,6 +523,24 @@ class Span {
         this.column = column;
     }
 
+    /**
+     * Return a new Span that is a copy of this one
+     * @returns {Span} The copied Span
+     */
+    copy() {
+        return new Span({
+            start: this.start,
+            end: this.end,
+            line: this.line,
+            column: this.column
+        });
+    }
+
+    /**
+     * Set the end of this span to the end of the given token
+     * @param {Token} token The token to set the end to
+     * @returns {Span} Self
+     */
     to(token) {
         this.end = token.end;
         return this;
@@ -866,16 +901,51 @@ function continueLexing(state) {
     return state.tokens;
 }
 
+/**
+ * Internal representation of a symbol in the symbol table
+ */
+class Symbol {
+    constructor(name, info = {}) {
+        this.name = name;
+        this.info = info;
+
+        this.seen = false; // For dead code elimination and unused variable warnings
+    }
+}
+
 class ParserState extends State {
+    /**
+     * Creates a new ParserState with the given tokens and options
+     * @param {*} tokens Tokens to parse
+     * @param {*} options Parser options
+     * @param {int} options.optimize Optimization level (0-3)
+     * @param {function} options.onWarn Warning callback
+     * @param {function} options.onError Error callback
+     * @param {function} options.onNote Note callback
+     */
     constructor(tokens = [], options = {}) {
         super(options);
         this.tokens = tokens;
+
+        this.symbolTable = new Map();
+        this.scopeStack = [];
+        this.nsStack = [];
+
+        this.topLevel = false;
+
+        options.optimize ??= 3;
+        this.optimize = options.optimize;
     }
 
     isEnd() {
         return this.position >= this.tokens.length;
     }
 
+    /**
+     * Peeks at the next token without consuming it
+     * @param {int} offset How many tokens to look ahead (default 0, which is the next token)
+     * @returns {Token|null} The token at the given offset, or null if out of bounds
+     */
     peek(offset = 0) {
         if(this.position + offset >= this.tokens.length) {
             return null;
@@ -883,12 +953,21 @@ class ParserState extends State {
         return this.tokens[this.position + offset];
     }
 
+    /**
+     * @returns {Token} The consumed token
+     */
     consume() {
         const token = this.tokens[this.position];
         this.position++;
         return token;
     }
 
+    /**
+     * If the next token matches the given type and value, consume it and return it. Otherwise, return false.
+     * @param {string} type The expected token type
+     * @param {string|null} value The expected token value (optional)
+     * @returns {Token|false} The consumed token if it matches, or false if it doesn't
+     */
     match(type, value = null) {
         const token = this.peek();
         if(!token) return false;
@@ -898,6 +977,13 @@ class ParserState extends State {
         return token;
     }
 
+    /**
+     * Expects the next token to match the given type and value, and consumes it. If it doesn't match, throws an error.
+     * @param {string} type The expected token type
+     * @param {string|null} value The expected token value (optional)
+     * @param {string|null} customMessage Custom error message to use instead of the default (optional)
+     * @returns {Token} The consumed token if it matches
+     */
     expect(type, value = null, customMessage = null) {
         const token = this.peek();
         const message = customMessage || `Expected token of type '${type}'${value !== null ? ` with value '${value}'` : ""}`;
@@ -918,6 +1004,8 @@ class ParserState extends State {
 
         return this.isEnd();
     }
+
+    // TODO: Uh, scope management
 }
 
 /**
@@ -934,6 +1022,11 @@ function continueParsing(state) {
     return parseBlock(state, true);
 }
 
+/** * Parses a block of statements (enclosed in braces) from the token stream
+ * @param {ParserState} state The ParserState to parse from
+ * @param {boolean} topLevel Whether this block is the top-level program (if true, no braces are expected)
+ * @returns {object} The parsed block AST node
+ */
 function parseBlock(state, topLevel = false) {
     const open = topLevel? null: state.expect(lang.TOKEN_OPENING_BRACE, "{");
     const body = [];
@@ -941,20 +1034,35 @@ function parseBlock(state, topLevel = false) {
     const MAX = 100 + state.tokens.length;
     let it = 0;
 
+    if(topLevel) {
+        // Skip shebang if present
+        if(state.peek()?.type === lang.TOKEN_COMMENT && state.peek().value.startsWith("#!")) {
+            state.consume();
+        }
+    }
+
+    // TODO: Check # statements at the top of the block
+
     while(
         !state.isEnd()
         && (topLevel || !state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, "}"))
     ) {
-        // Safety check against infinite loops, just in case, should never happen
+        // Safety check against infinite loops, just in case (should never happen)
         if(it++ > MAX) state.error("Parsing block exceeded maximum iteration count (possible infinite loop)");
+
+        // Ensure the topLevel flag is set correctly for nested blocks
+        state.topLevel = topLevel;
 
         // Ignore comments, newlines, extra semicolons
         if(state.skipExtras()) break;
+        if(state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, "}")) {
+            break;
+        }
 
         const statement = parseStatement(state);
         body.push(statement);
 
-        if(statement.type !== lang.TYPE_BLOCK_STATEMENT) {
+        if(statement.type !== lang.TYPE_BLOCK_STATEMENT && statement.type !== lang.TYPE_FUNCTION) {
             // For now semicolons are reuqired :(
             state.expect(lang.TOKEN_SEMICOLON, null, "Expected ';' after statement");
         } else {
@@ -966,6 +1074,10 @@ function parseBlock(state, topLevel = false) {
     return { type: topLevel? lang.TYPE_PROGRAM : lang.TYPE_BLOCK_STATEMENT, body, span: topLevel? null: Span.from(open, state.peek(-1)) };
 }
 
+/** * Parses a single statement from the token stream
+ * @param {ParserState} state The ParserState to parse from
+ * @returns {object} The parsed statement AST node
+ */
 function parseStatement(state) {
     const token = state.peek();
 
@@ -988,9 +1100,61 @@ function parseStatement(state) {
         } else if(token.value === "function" || token.value === "fn") {
             type = lang.TYPE_FUNCTION;
             state.expect(lang.TOKEN_OPENING_BRACE, "(");
-        } else {
-            state.error(`Unsupported declaration type: '${token.value}'`);
+
+            init ??= { params: [], body: null };
+
+            while(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, ")")) {
+                const paramName = state.expect(lang.TOKEN_IDENTIFIER, null, "Expected parameter name in function declaration");
+                let paramType = null;
+
+                // if(state.match(lang.TOKEN_OPERATOR, ":")) {
+                //     paramType = parseExpression(state);
+                // }
+
+                // TODO: Handle default parameter values
+
+                init.params.push({ name: paramName.value, type: paramType, span: Span.from(paramName) });
+
+                if(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, ")")) {
+                    state.expect(lang.TOKEN_OPERATOR, ",", "Expected ',' between function parameters");
+                }
+            }
+
+            state.expect(lang.TOKEN_CLOSING_BRACE, ")");
+
+            // if(state.match(lang.TOKEN_OPERATOR, "->")) {
+            //     init.returnType = parseExpression(state);
+            // }
+
+            init.body = parseBlock(state);
+        } else if (token.value === "enum") {
+            type = lang.TYPE_ENUM_DECLARATION;
+            init = { members: [] };
+
+            state.expect(lang.TOKEN_OPENING_BRACE, "{");
+
+            // TODO: Inline enums
+            while(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, "}")) {
+                const memberName = state.expect(lang.TOKEN_IDENTIFIER, null, "Expected member name in enum declaration");
+                let memberValue = null;
+
+                if(state.match(lang.TOKEN_OPERATOR, "=")) {
+                    memberValue = parseExpression(state);
+                }
+
+                init.members.push({ name: memberName.value, value: memberValue, span: Span.from(memberName) });
+
+                if(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, "}")) {
+                    state.expect(lang.TOKEN_OPERATOR, ",", "Expected ',' between enum members");
+                }
+            }
+
+            state.expect(lang.TOKEN_CLOSING_BRACE, "}");
+        } else if (token.value === "class") {
+            type = lang.TYPE_CLASS_DECLARATION;
         }
+
+        else { state.error(`Unsupported declaration type: '${token.value}'`) }
 
         return {
             name: nameTok.value,
@@ -1006,6 +1170,11 @@ function parseStatement(state) {
     return { type: lang.TYPE_EXPRESSION_STATEMENT, expr, span: expr.span };
 }
 
+/** * Parses an expression using the Shunting Yard algorithm for operator precedence
+ * @param {ParserState} state The ParserState to parse from
+ * @param {number} minPrec The minimum precedence level to consider (used for recursion)
+ * @returns {object} The parsed expression AST node
+ */
 function parseExpression(state, minPrec = 0) {
     let left = parseAtom(state);
 
@@ -1013,6 +1182,38 @@ function parseExpression(state, minPrec = 0) {
         if(state.skipExtras()) break;
 
         const token = state.peek();
+
+        if(token.type === lang.TOKEN_SEMICOLON || token.type === lang.TOKEN_CLOSING_BRACE) {
+            break;
+        }
+
+        if(token.type === lang.TOKEN_OPENING_BRACE) {
+            // Function call or member access
+            if(token.value === "(") {
+                // Function call
+                state.consume();
+                const args = [];
+
+                while(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, ")")) {
+                    const arg = parseExpression(state);
+                    args.push(arg);
+
+                    if(!state.peek()?.matches(lang.TOKEN_CLOSING_BRACE, ")")) {
+                        state.expect(lang.TOKEN_OPERATOR, ",", "Expected ',' between function arguments");
+                    }
+                }
+
+                state.expect(lang.TOKEN_CLOSING_BRACE, ")");
+
+                left = {
+                    type: lang.TYPE_CALL_EXPRESSION,
+                    callee: left,
+                    arguments: args,
+                    span: Span.from(left.span ?? token, state.peek(-1)?.span ?? token)
+                };
+                continue;
+            }
+        }
 
         // No more operators to process
         if (token.type !== lang.TOKEN_OPERATOR) break;
@@ -1023,9 +1224,39 @@ function parseExpression(state, minPrec = 0) {
         // Consume operator (yummy)
         state.consume();
 
+        // if(token.value === ".") {
+        //     // Member access
+        //     state.consume();
+        //     const property = state.expect(lang.TOKEN_IDENTIFIER, null, "Expected identifier after '.' for member access");
+
+        //     left = {
+        //         type: lang.TYPE_MEMBER_EXPRESSION,
+        //         object: left,
+        //         property: { type: lang.TYPE_IDENTIFIER, name: property.value, span: Span.from(property) },
+        //         span: Span.from(left.span ?? token, property.span)
+        //     };
+        //     continue;
+        // }
+
         // = is right-associative
         // TODO: Later handle both *var and var*
         const right = parseExpression(state, (token.value === "=") ? opDiff : opDiff + 1);
+
+        if(state.optimize > 1) {
+            // Constant folding for simple binary operations with literals
+            if(left.type === lang.TYPE_LITERAL && right?.type === lang.TYPE_LITERAL) {
+                const folded = foldConstants(token.value, toJsValue(left), toJsValue(right));
+                if(folded !== null) {
+                    left = {
+                        type: lang.TYPE_LITERAL,
+                        typeOf: typeof folded === "string" ? lang.TOKEN_STRING : lang.TOKEN_NUMBER,
+                        value: folded,
+                        span: Span.from(left.span ?? token, right.span ?? token)
+                    };
+                    continue;
+                }
+            }
+        }
 
         left = {
             type: lang.TYPE_BINARY_OP,
@@ -1037,6 +1268,66 @@ function parseExpression(state, minPrec = 0) {
     }
 
     return left;
+}
+
+// TODO:
+// Some constants can be resolved at compiletime and folded down the line.
+function resolveConstant(node) {}
+
+function foldConstants(operator, leftVal, rightVal) {
+    try {
+        switch(operator) {
+            case "+": return leftVal + rightVal;
+            case "-": return leftVal - rightVal;
+            case "*": return leftVal * rightVal;
+            case "/": return rightVal !== 0 ? leftVal / rightVal : null;
+            case "%": return rightVal !== 0 ? leftVal % rightVal : null;
+            case "**": return leftVal ** rightVal;
+            case "&&": return leftVal && rightVal;
+            case "||": return leftVal || rightVal;
+            case "??": return leftVal ?? rightVal;
+            case "==": return leftVal == rightVal;
+            case "!=": return leftVal != rightVal;
+            case "===": return leftVal === rightVal;
+            case "!==": return leftVal !== rightVal;
+            case "<": return leftVal < rightVal;
+            case ">": return leftVal > rightVal;
+            case "<=": return leftVal <= rightVal;
+            case ">=": return leftVal >= rightVal;
+            case "&": return leftVal & rightVal;
+            case "|": return leftVal | rightVal;
+            case "^": return leftVal ^ rightVal;
+            case "<<": return leftVal << rightVal;
+            case ">>": return leftVal >> rightVal;
+            case ">>>": return leftVal >>> rightVal;
+            default: return null; // Unsupported operator for folding
+        }
+    } catch {
+        return null;
+    }
+}
+
+function toJsValue(value) {
+    switch(value.typeOf) {
+        case lang.TOKEN_STRING:
+            return String(value.value);
+        case lang.TOKEN_NUMBER:
+            return Number(value.value);
+        case lang.TOKEN_LITERAL:
+            if(value.value === "true" || value.value === "false") {
+                return value.value === "true";
+            }
+            if(value.value === "null") {
+                return null;
+            }
+            if(value.value === "undefined") {
+                return undefined;
+            }
+            // For other literals, return the raw value (eg. unit literals)
+            return value.value;
+        default:
+            throw new Error(`Unsupported literal type: ${value.typeOf}`);
+    }
 }
 
 function parseAtom(state) {
@@ -1107,6 +1398,7 @@ class Compiler extends State {
 class Compiler_JavaScript extends Compiler {
     #interns;
 
+    // Builtin helpers
     static builtins = new Map([
         ["__try_destroy", ""],
 
@@ -1117,10 +1409,39 @@ class Compiler_JavaScript extends Compiler {
         ["GDN", ""]
     ]);
 
-    static globals = new Map([
-        ["print", (args) => `console.log(${args.join(", ")});`],
+    // Global inline functions to map to
+    // TODO: Disallow overwriting/allow overwriting with a flag
+    static inline_globals = new Map([
+        ["print", (args) => `console.log(${args.join(", ")})`],
+        ["len", (args) => {
+            if(args.length !== 1) {
+                throw new Error(`'len' function expects exactly 1 argument, got ${args.length}`);
+            }
+
+            // TODO: Check invalid values, such as numbers
+            // TODO: Inline size for literal/const strings and arrays
+
+            if(typeof args[0] !== "string") {
+                // For non-string literals, we can inline length access directly
+                return `${args[0]}.length`;
+            }
+
+            if(args[0].startsWith("__u82s(")) {}
+
+            return `${args[0]}.length`
+        }]
     ]);
 
+    /**
+     * Creates a new Compiler_JavaScript instance with the given AST and options.
+     * This compiler compiles the AST into JavaScript code.
+     * @param {*} ast The AST to be compiled
+     * @param {*} options Compilation options
+     * @param {string[]} options.excludeBuiltins List of builtin names to exclude from the output (eg. if the environment already provides them)
+     * @param {function} options.onWarn Warning callback
+     * @param {function} options.onError Error callback
+     * @param {function} options.onNote Note callback
+     */
     constructor(ast, options = {}) {
         super(options);
 
@@ -1140,7 +1461,16 @@ class Compiler_JavaScript extends Compiler {
     }
 
     compile() {
-        for(const node of this.ast.body) {
+        this.compileBlock(this.ast);
+        return this.build.join("");
+    }
+
+    compileBlock(block) {
+        if(!block) {
+            this.error("Cannot compile null/undefined AST block");
+        }
+
+        for(const node of block.body) {
             if(node.type === lang.TYPE_DECLARATION) {
                 let line = `${node.kind === "global" ? "" : node.kind} ${node.name}`;
                 if(node.init) {
@@ -1162,7 +1492,9 @@ class Compiler_JavaScript extends Compiler {
             }
 
             if(node.type === lang.TYPE_FUNCTION) {
-                this.build.push(`function ${node.name}() {}`);
+                this.build.push(`function ${node.name}(${node.init.params.map(p => p.name).join(", ")}) {`);
+                this.compileBlock(node.init.body);
+                this.build.push("}");
                 continue;
             }
 
@@ -1172,9 +1504,18 @@ class Compiler_JavaScript extends Compiler {
                 continue;
             }
 
+            if(node.type === lang.TYPE_ENUM_DECLARATION) {
+                this.build.push(`const ${node.name} = {`);
+                for(const member of node.init.members) {
+                    const valueCode = member.value ? this.compileExpression(member.value) : `"${member.name}"`;
+                    this.build.push(`  ${member.name}: ${valueCode},`);
+                }
+                this.build.push("};");
+                continue;
+            }
+
             this.error(`Unsupported AST node type at top level: ${node.type}`);
         }
-        return this.build.join("");
     }
 
     compileExpression(node) {
@@ -1203,6 +1544,17 @@ class Compiler_JavaScript extends Compiler {
             return `(${node.operator}${this.compileExpression(node.argument)})`;
         }
 
+        if(node.type === lang.TYPE_CALL_EXPRESSION) {
+            const calleeCode = this.compileExpression(node.callee);
+            const argsCode = node.arguments.map(arg => this.compileExpression(arg)).join(", ");
+
+            if(Compiler_JavaScript.inline_globals.has(calleeCode)) {
+                return Compiler_JavaScript.inline_globals.get(calleeCode)(node.arguments.map(arg => this.compileExpression(arg)));
+            }
+
+            return `${calleeCode}(${argsCode})`;
+        }
+
         this.error(`Unsupported expression node type: ${node.type}`);
     }
 
@@ -1222,57 +1574,6 @@ class Compiler_JavaScript extends Compiler {
         }
     }
 }
-
-class Compiler_CPP extends Compiler {}
-class Compiler_x86 extends Compiler {
-    constructor(ast, options = {}) {
-        super(options);
-        this.ast = ast;
-        this.options = options;
-        this.language = "x86 Assembly";
-        this.build = [];
-    }
-
-    reset() {
-        this.constants = new Map();
-        this.labels = new Map();
-        this.vmem = 0;
-        this.vcc = 0;
-    }
-
-    compile() {
-        for(const node of this.ast.body) {
-            if(node.type === lang.TYPE_DECLARATION) {
-                // At least that is how I think it works, Ill have to learn x86 eventually
-                let line = `mov [${this.getConstant(node.name)}], `;
-                if(node.init) {
-                    line += this.compileExpression(node.init);
-                } else {
-                    line += "0";
-                }
-            }
-        }
-    }
-
-    getConstant(name) {
-        if(this.constants.has(name)) {
-            return this.constants.get(name);
-        }
-
-        this.vcc++;
-        this.constants.set(name, this.vcc);
-
-        if(this.vcc > 4294967295) {
-            this.error("Exceeded 32-bit constant limit");
-        }
-
-        return this.vcc;
-    }
-
-    compileExpression(node) {}
-}
-
-// class Compiler_Bytecode extends Compiler {} // Nevermind
 
 /**
  * Lexical analysis: Tokenizes the input code
@@ -1298,6 +1599,7 @@ function tokenize(code, options = {}) {
  * @param {function} options.onWarn Warning callback
  * @param {function} options.onError Error callback
  * @param {function} options.onNote Note callback
+ * @param {number} options.optimize Optimization level (0-3) for parsing (affects AST structure)
  * @returns {object} The AST
  */
 function parse(tokens, options = {}) {
@@ -1335,6 +1637,7 @@ function build(code, options = {}, extensions = []) {
 
 const GlitterExports = {
     lang,
+    util,
     Token,
 
     LexerState,

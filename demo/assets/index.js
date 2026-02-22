@@ -10,20 +10,40 @@ class EditorView extends View {
             })
         });
 
+        this.editor = window.editorInstance = new CodeEditor({ init: false });
+
+        const defaultCode = `// Welcome to the Glitter Lang demo!\n// Type some code here and click "Compile" to see the output.\n// Then you can click "Run" to execute it.\n\nprint("Hello, World!");`;
+        this.editor.setText(defaultCode);
+
+        this.editor.init().then(() => {
+            // Observe resize to adjust editor dimensions
+            const resizeObserver = new ResizeObserver(() => {
+                this.editor.resize(this.container.clientWidth, this.container.clientHeight);
+                this.editor.render();
+            });
+    
+            resizeObserver.observe(this.container);
+
+            this.editor.resize(this.container.clientWidth, this.container.clientHeight);
+            this.editor.render();
+        });
+
         this.container.append(LS.Create([
-            { class: "row", inner: [
-                (this.compileBtn = LS.Create({ tag: "button", inner: [ { tag: "i", class: "bi-hammer" }, " Compile" ] })),
-                (this.runBtn = LS.Create({ tag: "button", inner: [ { tag: "i", class: "bi-play-fill" }, " Run" ], attributes: { disabled: "true" } }))
+            { tag: "ls-box", class: "row elevated", style: "position: absolute; left: 50%; transform: translateX(-50%); bottom: 20px;", inner: [
+                (this.compileBtn = LS.Create({ tag: "button", tooltip: "Compile the current code <kbd>Ctrl+Enter</kbd>", inner: [ { tag: "i", class: "bi-hammer" }, " Compile" ] })),
+                (this.runBtn = LS.Create({ tag: "button", tooltip: "Run the compiled code <kbd>Ctrl+Space</kbd>", inner: [ { tag: "i", class: "bi-play-fill" }, " Run" ], attributes: { disabled: "true" } }))
             ] },
 
-            (this.input = LS.Create({ tag: "textarea", name: "input", style: "width: 100%; resize: vertical;", attributes: { spellcheck: "false" }, text: "var x = 10 + 10;" }))
+            this.editor.container,
+
+            // (this.input = LS.Create({ tag: "textarea", name: "input", style: "width: 100%; resize: vertical;", attributes: { spellcheck: "false" }, text: "var x = 10 + 10;" }))
         ]));
 
         this.compiled = null;
 
         this.handleCompile = this.compile.bind(this);
         this.handleRun = this.run.bind(this);
-        this.handleSetCode = (data) => { this.input.value = data.code; };
+        this.handleSetCode = (data) => { this.editor.setText(data.code).render(); };
 
         this.compileBtn.addEventListener("click", this.handleCompile);
         this.runBtn.addEventListener("click", this.handleRun);
@@ -54,7 +74,7 @@ class EditorView extends View {
 
         try {
             const t0 = performance.now();
-            const tokens = Glitter.tokenize(this.input.value, {
+            const tokens = Glitter.tokenize(this.editor.getText(), {
                 onWarn: stageLogger("lex", "warn"),
                 onNote: stageLogger("lex", "note")
             });
@@ -322,17 +342,22 @@ class OutputView extends View {
 
         this.output = this.container.querySelector("#output");
 
-        this.handleUpdate = (data) => {
+        this.handleUpdate = async (data) => {
             if(!this.isVisible) return;
 
             if (window.prettier && window.prettierPlugins) {
-                if(!data._prettier) data.text = prettier.format(data.text, {
-                    parser: "babel",
-                    plugins: prettierPlugins,
-                    semi: true,
-                    singleQuote: false,
-                    tabWidth: 4,
-                });
+                try {
+                    if(!data._prettier) data.text = await prettier.format(data.text, {
+                        parser: "babel",
+                        plugins: prettierPlugins,
+                        semi: true,
+                        singleQuote: false,
+                        tabWidth: 4,
+                    });
+                } catch (err) {
+                    console.error(err);
+                    events.quickEmit("glitter:log", { level: "error", message: err.message || err });
+                }
 
                 // If there are multiple outputviews, prevent re-formatting
                 data._prettier = true;
@@ -348,6 +373,33 @@ class OutputView extends View {
     destroy() {
         events.off("glitter:output-update", this.handleUpdate);
         super.destroy();
+    }
+}
+
+class TerminalView extends View {
+    constructor() {
+        super({
+            name: "TerminalView",
+            title: "Terminal",
+            container: LS.Create({
+                class: "terminal-panel"
+            })
+        });
+
+        this.terminal = window.terminalInstance = new AcceleratedTextGridRenderer({ init: false, welcomeMsg: "Welcome to Glitter Lang\nSee one of the examples to get started! " });
+
+        this.terminal.welcome(); // Render a welcome message
+        this.container.append(this.terminal.container);
+
+        this.terminal.init().then(() => {
+            // Observe resize to adjust terminal dimensions
+            const resizeObserver = new ResizeObserver(() => {
+                this.terminal.resize(this.container.clientWidth, this.container.clientHeight);
+            });
+    
+            resizeObserver.observe(this.container);
+            this.terminal.resize(this.container.clientWidth, this.container.clientHeight);
+        });
     }
 }
 
@@ -441,7 +493,8 @@ const EditorViewInstance = new EditorView();
 const LogsViewInstance = new LogsView();
 const ASTViewInstance = new ASTView();
 const OutputViewInstance = new OutputView();
-app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance);
+const TerminalViewInstance = new TerminalView();
+app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance, TerminalViewInstance);
 
 app.shortcutManager.map({
     "GLOBAL_COMPILE": ["ctrl+enter", "ctrl+s"],

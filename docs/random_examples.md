@@ -8,6 +8,43 @@ sleep(1s);
 print("Hello world");
 ```
 
+Intro: declarations
+```ts glitter
+// Variables
+let x = 5; // Mutable variable
+const y = 10; // Immutable variable
+local z = 15; // Local variable (only accessible within the current block/scope)
+global w = 20; // Global variable (accessible everywhere)
+comptime Hello = "Hello"; // Compile-time constant (only exists at compile time, cannot be used at runtime)
+
+// Functions
+fn add(a, b) {
+    return a + b;
+}
+
+// Inline functions (resolve to their body at compile time)
+inline fn test (expr) print(expr);
+
+// Compile-time functions (only exist at compile time, cannot be used at runtime)
+comptime fn square(x) => x * x;
+
+
+// Classes
+class Person {
+    (=name, =age);
+    greet() {
+        print(`Hello, my name is ${this.name} and I'm ${this.age} years old.`);
+    }
+}
+
+// Enums
+enum Color {
+    RED,
+    GREEN,
+    BLUE
+}
+```
+
 Pipeline operator
 ```ts glitter
 let result = 5
@@ -45,10 +82,18 @@ let something = dom.createElement("div")
 
 document.body.appendChild(something);
 
-// (We can return:)
+// (We can return early:)
 let another = dom.createElement("span")
     -> .append("This is a span")
     -> return dom.outerHTML;
+    -> .append("This will never be reached");
+
+// We can combine them and pass functions:
+let combined = dom.createElement("p")
+    -> .append
+    |> ("This is a paragraph. ")
+    |> ("Here is another one.")
+    -> .appendTo(document.body);
 ```
 
 Numbers
@@ -447,14 +492,15 @@ obj.printInfo();
 // Array values: 1 2 5
 ```
 
-### Comptime features
+### Comptime features & metaprogramming
 ```ts glitter
-// Sometimes you want something decided at compile time rather than runtime.
+// Sometimes you want something decided or even done at compile time rather than runtime.
+
 // Glitter provides several features for this:
-// Compile-time constants, conditional compilation, and compile-time functions.
+// Compile-time constants, conditional compilation, macros, and compile-time functions.
 
 // Compile-time constants
-const 2PI = constexpr<3.14159 * 2>;
+const 2PI = constexpr<3.14159 * 2>; // Becomes a static "6.28318" in the code
 
 // Conditional compilation
 if constexpr (2PI > 3) {
@@ -470,6 +516,13 @@ comptime fn comptimeSquare(x:number) => x * x;
 let squaredValue = comptimeSquare(5); // Turns to a static "25"
 print("Squared value:", squaredValue);
 // At runtime, comptimeSquare does not exist.
+// This only supports a smaller subset of features and (understandably) doesn't see any runtime data (only comptime-traceable values), but can do quite a lot.
+
+comptime fn splitWords(str:string) {
+    return:array str.split(" "); // Some more complex types such as arrays are supported, but need to be fully typed for intent
+}
+
+splitWords("Hello world at compile time"); // ["Hello", "world", "at", "compile", "time"]
 
 // What is probably more useful is external constants:
 if constexpr (#env.mode == "production") {
@@ -483,6 +536,74 @@ if constexpr (#env.mode == "production") {
 // #build - Build configuration (eg. version, date, etc.)
 // #compiler - Compiler configuration (eg. version, options, etc.)
 // #data - Custom data passed to the compiler (eg. build-time metadata)
+
+// Enums (resolve to an unique value)
+// Cannot be set from outside
+enum Color {
+    RED,
+    GREEN,
+    BLUE
+}
+
+// Inline enums - don't require a namespace, always get inlined
+inline enum {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT
+}
+
+// UP === 0, gets inlined as 0 (not accessible from the outside at runtime)
+
+// Bitfield enums (resolve to unique bit values)
+bitfield Permission {
+    READ,
+    WRITE,
+    EXECUTE
+}
+
+// Defines/macros
+#define SQUARE(x) (x * x)
+print("Square of 5:", SQUARE(5)); // Expands to (5 * 5) (different from a comptime function which would turn to 25)
+
+// Custom syntax (experimental). Rules are evaluated in order. Syntax code cannot contain "]>".
+syntax mySyntax {
+    #pre [
+    #define '(name)' '"Glitter"'
+    #wrap token '"' '"'
+    #define_operator \s ", "
+    #post ]
+}
+
+use mySyntax;
+
+const words = <mySyntax[Hello (name) language+"!"]>; // Expands to '["Hello", "Glitter", "language" + "!"]'
+```
+
+### Operator overloading
+You can overload binary operators in your classes by defining special methods.
+
+```ts glitter
+class Vector2D {
+    (=x:number = 0, =y:number = 0);
+
+    // Overload the "+" operator
+    operator +(other:Vector2D) {
+        return new Vector2D(this.x + other.x, this.y + other.y);
+    }
+
+    // Overload the "-" operator
+    operator -(other:Vector2D) {
+        return new Vector2D(this.x - other.x, this.y - other.y);
+    }
+}
+
+let v1 = new Vector2D(2, 3);
+let v2 = new Vector2D(4, 5);
+
+let v3 = v1 + v2; // Uses overloaded "+" operator
+
+print(`v3: (${v3.x}, ${v3.y})`); // Outputs: v3: (6, 8)
 ```
 
 ### Sandboxed scopes
@@ -634,28 +755,34 @@ div.on("click", => {
 doc.body.append(div);
 ```
 
-### Operator overloading
-You can overload binary operators in your classes by defining special methods.
-
+### Glitter UI/document format (.glu)
 ```ts glitter
-class Vector2D {
-    (=x:number = 0, =y:number = 0);
+#doc;
+import glitter:time;
 
-    // Overload the "+" operator
-    overload + (other:Vector2D) {
-        return new Vector2D(this.x + other.x, this.y + other.y);
-    }
+let date;
+const name = <safe_discoverable["Glitter UI"]>;
 
-    // Overload the "-" operator
-    overload - (other:Vector2D) {
-        return new Vector2D(this.x - other.x, this.y - other.y);
-    }
-}
+<div id="my-div" class="container">
+    Hello, {name}! Today is {date}.
 
-let v1 = new Vector2D(2, 3);
-let v2 = new Vector2D(4, 5);
+    time.interval(1s, => date = time.format(<-now, "YYYY-MM-DD, HH:mm:ss"));
+</div>
 
-let v3 = v1 + v2; // Uses overloaded "+" operator
+/*
+This compiles into an optimized HTML & JS file, executing once and resolving reactivity, such as
 
-print(`v3: (${v3.x}, ${v3.y})`); // Outputs: v3: (6, 8)
-``` 
+<script>
+window._gui = {};
+let date;
+</script>
+<div id="my-div" class="container">
+    Hello, Glitter UI! Today is <script>_gui.date=document.currentScript.after("")</script>.
+</div>
+<script>
+setInterval(() => {
+    _gui.date.data = // ...
+}, 1000); // This would be synced
+</script>
+*/
+```

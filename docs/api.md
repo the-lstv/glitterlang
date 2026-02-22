@@ -80,10 +80,18 @@ const js = Glitter.build("let x = 5; print(x);");
 **Example with extensions:**
 ```javascript
 const extensions = [
-    function(ast) {
-        ast.findMatch({ type: [Glitter.lang.DECLARATION, Glitter.lang.IDENTIFIER], name: "x" })
-           .forEach(node => { node.name = "y"; if(node.type === Glitter.lang.DECLARATION) node.init = Glitter.util.constructLiteral("string", "Hello") });
-        return ast;
+    {
+        // Simple replace all identifiers named "x" with "y" and initialize them to "Hello"
+        [Glitter.lang.DECLARATION](node) {
+            if(node.name === "x") {
+                node.name = "y";
+                node.init = Glitter.util.constructValue("Hello");
+            }
+        },
+
+        [Glitter.lang.IDENTIFIER](node) {
+            if(node.name === "x") node.name = "y";
+        }
     }
 ];
 
@@ -131,4 +139,12 @@ In this case the compiler is guessed from the output file extension.
 
 Options:
 - `-o, --output <file>`: Specify output file
-- `--keep-comments`: Retain comments in the output (note that not all compilers may support this)
+- `-O, --optimize`: Optimization level (0-3, eg. `-O3` for maximum optimization, `-O0` to disable optimizations)
+- `--exclude-builtins <names>`: Comma-separated list of builtin names to exclude from the output (eg. if the environment already provides them)
+- `--keep-comments`: Retain comments in the output (note that this is not guaranteed)
+
+Optimization levels:
+- `0`: No optimizations (code is left mostly as-written) *- recommended for debugging only*
+- `1`: Basic optimizations (constant folding, dead code elimination, etc.) *- default*
+- `2`: Advanced optimizations (function inlining, loop unrolling, etc.) *- recommended*
+- `3`: Maximum optimizations (more advanced transformations that may affect the structure of the code) *- recommended for whole-program compilation where exact semantics are not critical*

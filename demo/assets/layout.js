@@ -8,7 +8,15 @@ const LAYOUT_SCHEMA_PRESETS = {
         title: "Default",
         direction: 'row',
         inner: [
-            { type: 'slot', view: 'EditorView' },
+            {
+                inner: {
+                    direction: 'column',
+                    inner: [
+                        { type: 'slot', view: 'EditorView', resize: { height: "70%" } },
+                        { type: 'slot', view: 'TerminalView' }
+                    ]
+                }
+            },
             {
                 inner: {
                     direction: 'column',
@@ -31,7 +39,7 @@ const LAYOUT_SCHEMA_PRESETS = {
             {
                 direction: 'row',
                 inner: [
-                    { type: 'slot', view: 'OutputView', resize: { width: "50%" } },
+                    { type: 'slot', view: 'TerminalView', resize: { width: "50%" } },
                     { type: 'slot', view: 'LogsView' }
                 ]
             }
@@ -66,11 +74,11 @@ const LAYOUT_SCHEMA_PRESETS = {
     * |       |
     */
     'vertical-compiler': {
-        title: "Vertical Compiler",
+        title: "Vertical",
         direction: 'column',
         inner: [
             { type: 'slot', view: 'EditorView', resize: { height: "50%" } },
-            { type: 'slot', view: 'OutputView', resize: { height: "25%" } },
+            { type: 'slot', view: 'TerminalView', resize: { height: "25%" } },
             { type: 'slot', view: 'LogsView' }
         ]
     },
@@ -101,7 +109,7 @@ const LAYOUT_SCHEMA_PRESETS = {
     * | |   | |
     */
     'three-column-compiler': {
-        title: "Three Column Compiler",
+        title: "Three Columns",
         direction: 'row',
         inner: [
             { type: 'slot', view: 'EditorView', resize: { width: "35%" } },
@@ -121,7 +129,7 @@ const LAYOUT_SCHEMA_PRESETS = {
         title: "Four Panel",
         direction: 'column',
         inner: [
-            { inner: [{ type: 'slot', view: 'EditorView', resize: { width: "50%" } }, { type: 'slot', view: 'OutputView' }], resize: { height: "50%" } },
+            { inner: [{ type: 'slot', view: 'EditorView', resize: { width: "50%" } }, { type: 'slot', view: 'TerminalView' }], resize: { height: "50%" } },
             { inner: [{ type: 'slot', view: 'ASTView', resize: { width: "50%" } }, { type: 'slot', view: 'LogsView' }], resize: { height: "50%" } }
         ]
     },
