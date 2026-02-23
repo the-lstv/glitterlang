@@ -31,6 +31,7 @@ It's primarily useful when working with Glitter, because it's specifically desig
 ## The bad
 - In **very** early development, not in an useable state yet (days worked on: 1 - you're early).
 - Not as widely adapted and mature yet
+- Currently only supports ASCII characters (other may not render correctly)
 - Needs font conversion to a pre-computed msdf format, doesn't work with some font features, and has a limited character set
 - Font ligatures are not supported yet (are planned)
 - Worse accessibility support (since text doesn't exist in DOM), doesn't use native scrollbars

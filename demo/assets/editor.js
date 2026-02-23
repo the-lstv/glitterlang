@@ -691,7 +691,7 @@ class AcceleratedTextGridRenderer {
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
@@ -712,7 +712,7 @@ class AcceleratedTextGridRenderer {
             /* x, y, w, h, xoffset, yoffset, xadvance, u0, v0, u1, v1, xOff, yOff, gw, gh */
 
             // Font atlas data
-            map[(code - lowestCharCode) * MAP_SLOTS + 0] = charData.x;
+            map[(code - lowestCharCode) * MAP_SLOTS    ] = charData.x;
             map[(code - lowestCharCode) * MAP_SLOTS + 1] = charData.y;
             map[(code - lowestCharCode) * MAP_SLOTS + 2] = charData.width;
             map[(code - lowestCharCode) * MAP_SLOTS + 3] = charData.height;
@@ -996,26 +996,35 @@ Piece{ offset: 0, length: 0 } // [0, 0, 0]
 */
 
 
+const EMPTY_U8 = new Uint8Array(0);
+
 /**
- * Mutable text field
+ * Mutable binary text field with undo/redo & line scanning
  */
 
 class MutableTextField {
     constructor() {
         this.data = null; // Uint8Array for UTF-8 encoded text
         this.lines = null; // Uint32Array byte offsets
+        this.appendBuffer = new Uint8Array(1024);
+        this.appendBufferUsed = 0;
+        this.pieces = [[0, 0, 0]];
     }
 
     load(text) {
         if(text instanceof Uint8Array) {
             this.data = text;
         } else if(typeof text === "string") {
-            this.data = textEncoder.encode(text);
+            if(text.length > 1e4) {
+                console.warn("Prefer passing input as a buffer.");
+            }
+
+            this.data = this.__s2u8(text);
         } else {
             throw new Error("Invalid text type, must be Uint8Array or string");
         }
 
-        // Rough estimate for now
+        // Rough estimate for now, assuming average line length of 50 chars + 512 lines of buffer for growth
         this.lines = new Uint32Array((Math.ceil(this.data.length / 50) + 512) * 2);
         this.scanLines();
         return this;
@@ -1025,12 +1034,94 @@ class MutableTextField {
         return this.data;
     }
 
-    getLineInfo(line) {
-        if(line < 0 || line >= this.lines.length) {
-            return null;
+    getData() {
+        // TODO
+        return this.data;
+    }
+
+    getText() {
+        return textDecoder.decode(this.getData());
+    }
+
+    commit() {
+        this.buffer = this.getData();
+        this.appendBuffer = new Uint8Array(1024);
+        this.appendBufferUsed = 0;
+        this.pieces = [[0, this.buffer.length, 0]];
+    }
+
+    ensure(capacity) {
+        if(this.appendBuffer.length - this.appendBufferUsed >= capacity) return;
+
+        let newSize = this.appendBuffer.length;
+        while(newSize - this.appendBufferUsed < capacity) {
+            newSize *= 2;
+        }
+        const newBuffer = new Uint8Array(newSize);
+        newBuffer.set(this.appendBuffer.subarray(0, this.appendBufferUsed));
+        this.appendBuffer = newBuffer;
+    }
+
+    insert(at, text) {
+        const encoded = text instanceof Uint8Array ? text : this.__s2u8(text);
+        this.ensure(encoded.length);
+        this.appendBuffer.set(encoded, this.appendBufferUsed);
+        this.appendBufferUsed += encoded.length;
+
+        const piece = this.findPiece(at);
+        // ...
+    }
+
+    findPiece(at) {
+        // Binary search for the piece containing the given offset
+        let left = 0;
+        let right = this.pieces.length - 1;
+        while (left <= right) {
+            const mid = Math.floor((left + right) / 2);
+            const pieceStart = this.pieces[mid][0];
+            const pieceEnd = pieceStart + this.pieces[mid][1];
+
+            if(at >= pieceStart && at < pieceEnd) {
+                return this.pieces[mid];
+            } else if(at < pieceStart) {
+                right = mid - 1;
+            } else {
+                left = mid + 1;
+            }
+        }
+        throw new Error("Piece not found");
+    }
+
+    __s2u8(str) {
+        const len = str.length;
+
+        if(len === 0) return EMPTY_U8;
+        if(len === 1) return new Uint8Array([str.charCodeAt(0)]);
+
+        // A loop is faster under ~2000 chars.
+        // After that the encoder overhead catches up to JS loop overhead and becomes faster
+        // Warning: this loop only handles ASCII, utf8 should be supported eventually
+        if(len <= 2000) {
+            const buf = new Uint8Array(len);
+            for(let i = 0; i < len; i++) {
+                buf[i] = str.charCodeAt(i);
+            }
+            return buf;
         }
 
-        return [this.lines[line], this.lines[line + 1]];
+        return textEncoder.encode(str);
+    }
+
+    insertU8Char(at, char) {
+        const code = typeof char === "string" ? char.charCodeAt(0) : char;
+
+        if(code > 255) {
+            throw new Error("Character code exceeds 255");
+        }
+
+        this.ensure(1);
+        this.pieces.push([this.appendBufferUsed, 1, 1]);
+        this.appendBuffer[this.appendBufferUsed++] = code;
     }
 
     scanLines() {
@@ -1047,7 +1138,7 @@ class MutableTextField {
         // I will keep unrolling for Firefox and chrome will have to suck it
 
         for (; i <= len - 8; i += 8) {
-            if (data[i + 0] === 10) { lines[line++] = i + 0 + 1; }
+            if (data[i    ] === 10) { lines[line++] = i     + 1; }
             if (data[i + 1] === 10) { lines[line++] = i + 1 + 1; }
             if (data[i + 2] === 10) { lines[line++] = i + 2 + 1; }
             if (data[i + 3] === 10) { lines[line++] = i + 3 + 1; }
@@ -1063,9 +1154,25 @@ class MutableTextField {
         }
     }
 
+    // stupid name i know
+    getPointerData(ptr) {
+        const where = ptr[0];
+        const at = ptr[1];
+        const len = ptr[2];
+
+        if(where === 0) return this.data.subarray(at, at + len);
+        else if(where === 1) return this.appendBuffer.subarray(at, at + len);
+        else throw new Error("Invalid piece location");
+    }
+
     destroy() {
+        if(this.destroyed) return;
         this.data = null;
         this.lines = null;
+        this.appendBuffer = null;
+        this.pieces = null;
+        this.appendBufferUsed = null;
+        this.destroyed = true;
     }
 }
 
@@ -1079,19 +1186,14 @@ class EditorState extends MutableTextField {
         this.selectionCache = null;
 
         this.tokens = [];
-        this.undoStack = [];
-        this.redoStack = [];
     }
 
     destroy() {
+        if(this.destroyed) return;
         this.caretCol = null;
         this.caretRow = null;
         this.selectionCache = null;
         this.tokens = null;
-        this.appendBuffer = null;
-        this.pieces = null;
-        this.undoStack = null;
-        this.redoStack = null;
         super.destroy();
     }
 }
