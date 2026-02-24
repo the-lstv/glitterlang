@@ -1422,18 +1422,39 @@ class CodeEditor extends AcceleratedTextGridRenderer {
     }
 
     setTheme(theme = null) {
+        // Used for color conversion
         const tempColor = new LS.Color();
+
         this.theme = {
             default: tempColor.set(theme && theme.default || "#aaaaaa").floatPixel,
             identifier: tempColor.set(theme && theme.identifier || "#4488ff").floatPixel,
             keyword: tempColor.set(theme && theme.keyword || "#ff4488").floatPixel,
             string: tempColor.set(theme && theme.string || "#44ff44").floatPixel,
             number: tempColor.set(theme && theme.number || "#ff8844").floatPixel,
-            bg: tempColor.set(theme && theme.bg || "#000000").floatPixel
+            number_unit: tempColor.set(theme && (theme.number_unit || theme.number) || "#b66231").floatPixel,
+            braces: tempColor.set(theme && theme.braces || "#ababab").floatPixel,
+            operator: tempColor.set(theme && theme.operator || "#8888ff").floatPixel,
+            background: tempColor.set(theme && theme.background || "#000000").floatPixel,
+            selection: tempColor.set(theme && theme.selection || "#ffffff88").floatPixel,
+            comment: tempColor.set(theme && theme.comment || "#888888").floatPixel
         };
 
-        this.setOptions({ backgroundColor: this.theme.bg });
+        // Map to Glitter tokens (temporary)
+        this.theme[Glitter.lang.TOKEN_KEYWORD] = this.theme.keyword;
+        this.theme[Glitter.lang.TOKEN_DECLARATION] = this.theme.keyword;
+        this.theme[Glitter.lang.TOKEN_IDENTIFIER] = this.theme.identifier;
+        this.theme[Glitter.lang.TOKEN_STRING] = this.theme.string;
+        this.theme[Glitter.lang.TOKEN_NUMBER] = this.theme.number;
+        this.theme[Glitter.lang.TOKEN_UNIT] = this.theme.number_unit || this.theme.number;
+        this.theme[Glitter.lang.TOKEN_OPERATOR] = this.theme.operator;
+        this.theme[Glitter.lang.TOKEN_CLOSING_BRACE] = this.theme[Glitter.lang.TOKEN_OPENING_BRACE] = this.theme.braces;
+
+        this.setOptions({ backgroundColor: this.theme.background });
         this.render();
+    }
+
+    setFromVSCodeTheme(theme) {
+        this.setTheme(CodeEditor.fromVSCodeTheme(theme));
     }
 
     init(options = {}) {
@@ -1480,30 +1501,103 @@ class CodeEditor extends AcceleratedTextGridRenderer {
             const lineEnd = state.lines[lineIndex] || state.data.length;
             const lineText = state.data.subarray(lineStart, lineEnd);
 
-            const lineTokens = this.tokens.filter(t => t.line === lineIndex);
-            
-            for (let col = 0; col < this.cols; col++) {
-                // TEMPORARY logic
-                const color = lineTokens.reduce((acc, token) => {
-                    const tokenStartCol = token.start - lineStart;
-                    if (col >= tokenStartCol && col < tokenStartCol + (token.end - token.start)) {
-                        return this.theme[token.type] || this.theme.default;
+            /**
+             * @type {Array<[type, start, end]>}
+             */
+            const lineTokens = this.tokens[lineIndex];
+            let col = 0;
+
+            if (lineTokens && lineTokens.length > 0) {
+
+                for (const token of lineTokens) {
+                    // console.log("Token", token, "from", tokenStartCol, "to", token[2] - lineStart);
+                    for (; col < this.cols && col < token[2]; col++) {
+                        const charCode = lineText[col] || 32;
+                        let color = this.theme[token[0]] || this.theme.default;
+                        this._updateVertex(col, row, charCode, color[0], color[1], color[2], color[3]);
                     }
-                    return acc;
-                }, this.theme.default);
-                
-                // Fill to the end
-                this._updateVertex(col, row, lineText[col] || 0, color[0], color[1], color[2], color[3]);
+                }
             }
+
+            this.#renderRemainder(col, row, lineText);
         }
 
         this.render();
+    }
+
+    #renderRemainder(col, row, lineText, limit = this.cols) {
+        const color = this.theme.default;
+        for (; col < limit; col++) {
+            this._updateVertex(col, row, lineText[col] || 0, color[0], color[1], color[2], color[3]);
+        }
     }
 
     // TODO: Virtual scrolling without re-rendering the screen
     #renderSeek(col, row) {
         // console.log("Virtual scroll to", col, row);
         this.#renderScreen(this.state, true);
+    }
+
+    /**
+     * Set theme from a VSCode theme object.
+     * TODO: The token color mapping is currently very rough and may not be 100% accurate.
+     * @param {*} theme
+     */
+    static fromVSCodeTheme(theme) {
+        const colors = theme.colors || {};
+        const tokenColors = theme.tokenColors || theme.settings || [];
+
+        const getTokenColor = (scopes) => {
+            for (const rule of tokenColors) {
+                if (!rule.scope || !rule.settings?.foreground) continue;
+
+                const ruleScopes = Array.isArray(rule.scope)? rule.scope: rule.scope.split(",").map((s) => s.trim());
+
+                for (const s of scopes) {
+                    if (ruleScopes.some((r) => r === s || r.startsWith(s + ".") || s.startsWith(r + "."))) {
+                        return rule.settings.foreground;
+                    }
+                }
+            }
+            return undefined;
+        };
+
+        return {
+            default: colors["editor.foreground"] || getTokenColor(["source", "text"]),
+            identifier: getTokenColor([
+                "variable",
+                "variable.other",
+                "variable.parameter",
+                "entity.name.variable",
+            ]),
+            keyword: getTokenColor(["keyword", "storage", "storage.type", "storage.modifier"]),
+            string: getTokenColor(["string", "constant.character"]),
+            number: getTokenColor(["constant.numeric"]),
+            number_unit:
+                getTokenColor([
+                    "constant.numeric.unit",
+                    "constant.other.unit",
+                    "keyword.other.unit",
+                ]) || getTokenColor(["constant.numeric"]),
+            braces: getTokenColor([
+                "punctuation.section.braces",
+                "punctuation.section.brackets",
+                "punctuation.section.parens",
+                "meta.brace",
+            ]),
+            operator: getTokenColor([
+                "keyword.operator",
+                "punctuation.separator",
+                "punctuation.accessor",
+                "operator",
+            ]),
+            background: colors["editor.background"],
+            caret: colors["editorCursor.foreground"] || colors["editorCursor.background"],
+            selection:
+                colors["editor.selectionBackground"] ||
+                colors["editor.selectionHighlightBackground"],
+            comment: getTokenColor(["comment"]),
+        };
     }
 
     destroy(destroyState = true) {

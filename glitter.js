@@ -289,19 +289,20 @@ const lang = {
     STATE_NUMBER: 2,
 
     // Lexer Token Types
-    TOKEN_IDENTIFIER: "identifier",
-    TOKEN_NUMBER: "number",
-    TOKEN_STRING: "string",
-    TOKEN_COMMENT: "comment",
-    TOKEN_OPERATOR: "operator",
-    TOKEN_KEYWORD: "keyword",
-    TOKEN_DECLARATION: "declaration",
-    TOKEN_LITERAL: "literal",
-    TOKEN_OPENING_BRACE: "opening_brace",
-    TOKEN_CLOSING_BRACE: "closing_brace",
-    TOKEN_SEMICOLON: "semicolon",
-    TOKEN_NL: "newline",
-    TOKEN_UNIT: "unit",
+    TOKEN_IDENTIFIER: 0,
+    TOKEN_NUMBER: 1,
+    TOKEN_STRING: 2,
+    TOKEN_COMMENT: 3,
+    TOKEN_OPERATOR: 4,
+    TOKEN_KEYWORD: 5,
+    TOKEN_DECLARATION: 6,
+    TOKEN_LITERAL: 7,
+    TOKEN_OPENING_BRACE: 8,
+    TOKEN_CLOSING_BRACE: 9,
+    TOKEN_SEMICOLON: 10,
+    TOKEN_NL: 11,
+    TOKEN_UNIT: 12,
+
     // TOKEN_IDENTIFIER: 0,
     // TOKEN_NUMBER: 1,
     // TOKEN_STRING: 2,
@@ -610,7 +611,10 @@ class LexerState extends State {
 
     push(token) {
         if(this.lineMap) {
-            this.lineMapData.push(token[0], token[1], token[2]);
+            this.lineMapData[this.line] ??= [];
+            if(!token[1]) token[1] = this.valueStart;
+            if(!token[2]) token[2] = this.position;
+            this.lineMapData[this.line].push(token);
             return;
         }
 
@@ -1345,6 +1349,7 @@ function toJsValue(value) {
             if(value.value === "undefined") {
                 return undefined;
             }
+
             // For other literals, return the raw value (eg. unit literals)
             return value.value;
         default:
