@@ -410,6 +410,19 @@ class AcceleratedTextGridRenderer {
         this.gridDirty = true;
     }
 
+    /**
+     * Clear a row
+     * TODO: Could be more efficient
+     * @param {*} row Row to clear
+     * @returns {void}
+     */
+    clearLine(row) {
+        if (!this.vertexData || row < 0 || row >= this.rows) return;
+        for (let col = 0; col < this.cols; col++) {
+            this._updateVertex(col, row, 0);
+        }
+    }
+
     setChar(col, row, charCode, r = 1, g = 1, b = 1, a = 1) {
         if (col < 0 || col >= this.cols || row < 0 || row >= this.rows || !this.font) return;
         this._updateVertex(col, row, charCode, r, g, b, a);
@@ -999,19 +1012,44 @@ Piece{ offset: 0, length: 0 } // [0, 0, 0]
 const EMPTY_U8 = new Uint8Array(0);
 
 /**
- * Mutable binary text field with undo/redo & line scanning
+ * Mutable binary text field with undo/redo & line scanning.
+ * Used to work with large editable documents
  */
 
 class MutableTextField {
-    constructor() {
-        this.data = null; // Uint8Array for UTF-8 encoded text
-        this.lines = null; // Uint32Array byte offsets
+    constructor(data, commitCallback = null) {
+        this.load(data);
+        this.commitCallback = commitCallback;
+    }
+
+    commit() {
+        this.data = this.getData();
         this.appendBuffer = new Uint8Array(1024);
         this.appendBufferUsed = 0;
-        this.pieces = [[0, 0, 0]];
+        this.pieces = [[0, this.data.length, 0]];
+        if(this.commitCallback) {
+            this.commitCallback(this);
+        }
+    }
+
+    reset() {
+        this.data = EMPTY_U8;
+        this.lines = null;
+        this.lineCount = 0;
+        this.appendBuffer = new Uint8Array(1024);
+        this.appendBufferUsed = 0;
+        this.pieces = [[0, 0, 0]]; // Empty document
+        if(this.commitCallback) {
+            this.commitCallback(this);
+        }
+        return this;
     }
 
     load(text) {
+        if(!text || text.length === 0) {
+            return this.reset();
+        }
+
         if(text instanceof Uint8Array) {
             this.data = text;
         } else if(typeof text === "string") {
@@ -1024,9 +1062,18 @@ class MutableTextField {
             throw new Error("Invalid text type, must be Uint8Array or string");
         }
 
+        this.pieces = [[0, this.data.length, 0]];
+        this.appendBuffer = new Uint8Array(1024);
+        this.appendBufferUsed = 0;
+
         // Rough estimate for now, assuming average line length of 50 chars + 512 lines of buffer for growth
         this.lines = new Uint32Array((Math.ceil(this.data.length / 50) + 512) * 2);
+        this.lineCount = 0;
         this.scanLines();
+
+        if(this.commitCallback) {
+            this.commitCallback(this);
+        }
         return this;
     }
 
@@ -1035,19 +1082,28 @@ class MutableTextField {
     }
 
     getData() {
-        // TODO
-        return this.data;
+        if (!this.pieces || this.pieces.length === 0 || (this.pieces.length === 1 && this.pieces[0][1] === 0)) return EMPTY_U8;
+
+        if(this.pieces.length === 1 && this.pieces[0][2] === 0) {
+            // If the document is a single piece referencing the original buffer, return it directly without copying
+            return this.data.subarray(this.pieces[0][0], this.pieces[0][0] + this.pieces[0][1]);
+        }
+
+        const result = new Uint8Array(this.pieces.reduce((sum, piece) => sum + piece[1], 0));
+        let offset = 0;
+        for (const [pBufOffset, pLen, pBufIdx] of this.pieces) {
+            if (pBufIdx === this.APPEND_BUFFER_INDEX) {
+                result.set(this.appendBuffer.subarray(pBufOffset, pBufOffset + pLen), offset);
+            } else {
+                result.set(this.data.subarray(pBufOffset, pBufOffset + pLen), offset);
+            }
+            offset += pLen;
+        }
+        return result;
     }
 
     getText() {
         return textDecoder.decode(this.getData());
-    }
-
-    commit() {
-        this.buffer = this.getData();
-        this.appendBuffer = new Uint8Array(1024);
-        this.appendBufferUsed = 0;
-        this.pieces = [[0, this.buffer.length, 0]];
     }
 
     ensure(capacity) {
@@ -1062,14 +1118,155 @@ class MutableTextField {
         this.appendBuffer = newBuffer;
     }
 
-    insert(at, text) {
+    /**
+     * Insert & overwrite
+     * @param {string|Uint8Array} text - Text to insert (string will be UTF-8 encoded)
+     * @param {number} at - Byte offset to insert at
+     * @param {boolean} shift - If true, the new text will be inserted and push existing text forward. If false, the new text will overwrite existing text.
+     */
+    insert(text, at, shift = false) {
+        if (!text) return;
         const encoded = text instanceof Uint8Array ? text : this.__s2u8(text);
+        if (encoded.length === 0) return;
+
+        // Delete the equivalent length first
+        if (!shift) {
+            this.delete(at, encoded.length);
+        }
+
+        // Allocate space in the appendBuffer
         this.ensure(encoded.length);
-        this.appendBuffer.set(encoded, this.appendBufferUsed);
+        const startOffset = this.appendBufferUsed;
+        this.appendBuffer.set(encoded, startOffset);
         this.appendBufferUsed += encoded.length;
 
-        const piece = this.findPiece(at);
-        // ...
+        // Handle empty document
+        if (!this.pieces || this.pieces.length === 0) {
+            this.pieces = [[startOffset, encoded.length, this.APPEND_BUFFER_INDEX]];
+            return;
+        }
+
+        const [index, offset] = this.#findPieceOffset(at);
+
+        // Clamped to end of document
+        if (index >= this.pieces.length) {
+            const lastPiece = this.pieces[this.pieces.length - 1];
+            // Extend the last piece if contiguous in the append buffer
+            if (lastPiece[2] === this.APPEND_BUFFER_INDEX && lastPiece[0] + lastPiece[1] === startOffset) {
+                lastPiece[1] += encoded.length;
+            } else {
+                this.pieces.push([startOffset, encoded.length, this.APPEND_BUFFER_INDEX]);
+            }
+            return;
+        }
+
+        const piece = this.pieces[index];
+        const [pBufOffset, pLen, pBufIdx] = piece;
+
+        if (offset === 0) {
+            // Inserting perfectly before the current piece
+            let merged = false;
+            if (index > 0) {
+                const prevPiece = this.pieces[index - 1];
+                // Extend the previous piece if contiguous
+                if (prevPiece[2] === this.APPEND_BUFFER_INDEX && prevPiece[0] + prevPiece[1] === startOffset) {
+                    prevPiece[1] += encoded.length;
+                    merged = true;
+                }
+            }
+            if (!merged) {
+                this.pieces.splice(index, 0, [startOffset, encoded.length, this.APPEND_BUFFER_INDEX]);
+            }
+        } else if (offset === pLen) {
+            // Inserting perfectly after the current piece
+            // Extend the current piece if contiguous
+            if (pBufIdx === this.APPEND_BUFFER_INDEX && pBufOffset + pLen === startOffset) {
+                piece[1] += encoded.length;
+            } else {
+                this.pieces.splice(index + 1, 0, [startOffset, encoded.length, this.APPEND_BUFFER_INDEX]);
+            }
+        } else {
+            // Split the current piece and inject the new piece in the middle
+            const leftPiece = [pBufOffset, offset, pBufIdx];
+            const newPiece = [startOffset, encoded.length, this.APPEND_BUFFER_INDEX];
+            const rightPiece = [pBufOffset + offset, pLen - offset, pBufIdx];
+
+            // Check if the left split chunk can contiguous-merge
+            if (leftPiece[2] === this.APPEND_BUFFER_INDEX && leftPiece[0] + leftPiece[1] === startOffset) {
+                leftPiece[1] += encoded.length;
+                this.pieces.splice(index, 1, leftPiece, rightPiece);
+            } else {
+                this.pieces.splice(index, 1, leftPiece, newPiece, rightPiece);
+            }
+        }
+    }
+
+    /**
+     * Delete
+     * @param {number} at - Byte offset to delete at
+     * @param {number} length - Number of bytes to delete
+     */
+    delete(at, length) {
+        if (length <= 0 || !this.pieces || this.pieces.length === 0) return;
+
+        let [index, offset] = this.#findPieceOffset(at);
+        let remaining = length;
+
+        while (remaining > 0 && index < this.pieces.length) {
+            const piece = this.pieces[index];
+            const [pBufOffset, pLen, pBufIdx] = piece;
+            const availableInPiece = pLen - offset;
+
+            if (availableInPiece > remaining) {
+                // The removal sits entirely within this single piece
+                if (offset === 0) {
+                    // Shave off the start of the piece
+                    piece[0] += remaining;
+                    piece[1] -= remaining;
+                } else {
+                    // Split the piece and discard the middle gap
+                    const leftPiece = [pBufOffset, offset, pBufIdx];
+                    const rightPiece = [pBufOffset + offset + remaining, pLen - offset - remaining, pBufIdx];
+                    this.pieces.splice(index, 1, leftPiece, rightPiece);
+                }
+                remaining = 0; 
+            } else {
+                // The removal swallows the end of this piece, and spills into the next
+                if (offset === 0) {
+                    // Remove the piece entirely
+                    this.pieces.splice(index, 1);
+                    // Do not increment index because the next piece shifted to current `index`
+                    index--; 
+                } else {
+                    // Shave off the end of this piece
+                    piece[1] = offset; 
+                }
+                
+                remaining -= availableInPiece;
+                index++;
+                offset = 0; // Future pieces in the while loop will be deleted starting at offset 0
+            }
+        }
+    }
+
+    #findPieceOffset(at) {
+        let currentOffset = 0;
+        for (let i = 0; i < this.pieces.length; i++) {
+            const len = this.pieces[i][1];
+            if (currentOffset + len > at) {
+                return [i, at - currentOffset];
+            }
+            currentOffset += len;
+        }
+        
+        // If 'at' is out of bounds (or exactly at the end of the file),
+        // gracefully clamp it to the final character of the last piece.
+        if (this.pieces.length > 0) {
+            const lastIdx = this.pieces.length - 1;
+            return [lastIdx, this.pieces[lastIdx][1]];
+        }
+        
+        return [0, 0];
     }
 
     findPiece(at) {
@@ -1101,6 +1298,7 @@ class MutableTextField {
         // A loop is faster under ~2000 chars.
         // After that the encoder overhead catches up to JS loop overhead and becomes faster
         // Warning: this loop only handles ASCII, utf8 should be supported eventually
+        // Not yet because the renderer itself currently only handles ASCII
         if(len <= 2000) {
             const buf = new Uint8Array(len);
             for(let i = 0; i < len; i++) {
@@ -1152,17 +1350,8 @@ class MutableTextField {
         for (; i < len; i++) {
             if (data[i] === 10) lines[line++] = i + 1;
         }
-    }
 
-    // stupid name i know
-    getPointerData(ptr) {
-        const where = ptr[0];
-        const at = ptr[1];
-        const len = ptr[2];
-
-        if(where === 0) return this.data.subarray(at, at + len);
-        else if(where === 1) return this.appendBuffer.subarray(at, at + len);
-        else throw new Error("Invalid piece location");
+        this.lineCount = line + 1;
     }
 
     destroy() {
@@ -1177,8 +1366,8 @@ class MutableTextField {
 }
 
 class EditorState extends MutableTextField {
-    constructor() {
-        super();
+    constructor(a, b, c) {
+        super(a, b, c);
 
         this.caretCol = 0;
         this.caretRow = 0;
@@ -1216,22 +1405,20 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         this.container.tabIndex = 0;
         this.container.classList.add("ls-code-editor");
 
-        // -- Editor state
-        this.state = options.state || new EditorState();
-        if(!(this.state instanceof EditorState)) {
-            throw new Error("State must be an instance of EditorState");
-        }
-
         // -- Theme
         this.theme = null;
         this.setTheme();
 
         // -- Other setup
-        this.frameFunction = this.renderEditorFrame.bind(this);
-        this.onVirtualScroll = (col, row) => {
-            console.log(col, row);
-            this.render();
-        };
+        this.frameFunction = this.#renderEditorFrame.bind(this);
+        this.onVirtualScroll = this.#renderSeek.bind(this);
+
+        // -- Editor state
+        this.state = options.state || new EditorState(options.content || null, this.#renderScreen.bind(this));
+
+        if(!(this.state instanceof EditorState)) {
+            throw new Error("State must be an instance of EditorState");
+        }
     }
 
     setTheme(theme = null) {
@@ -1251,7 +1438,9 @@ class CodeEditor extends AcceleratedTextGridRenderer {
 
     init(options = {}) {
         const promise = super.init(options);
-        return promise;
+        return promise.then(() => {
+            this.#renderScreen(this.state);
+        });
     }
 
     switchState(newState) {}
@@ -1264,16 +1453,67 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         return this.state.getText();
     }
 
-    renderEditorFrame() {
-        const totalLength = this.state.data.length;
+    // Here things like decorations will go later
+    #renderEditorFrame() {}
+
+    /**
+     * @param {EditorState} state
+     */
+    #renderScreen(state, virtual = false) {
+        if(!state || !state.lines || state !== this.state) return;
+
+        // TEMPORARY
+        // Later we should stream tokenization
+        this.tokens = Glitter.tokenize(state.getData(), { writeTokenValues: false, asLineMap: true });
+
+        console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
+
+        // Render visible lines
+        for (let row = 0; row < this.rows; row++) {
+            const lineIndex = this.virtualRow + row;
+            if(lineIndex >= state.lineCount) {
+                this.clearLine(row);
+                continue;
+            }
+
+            const lineStart = state.lines[lineIndex - 1] || 0;
+            const lineEnd = state.lines[lineIndex] || state.data.length;
+            const lineText = state.data.subarray(lineStart, lineEnd);
+
+            const lineTokens = this.tokens.filter(t => t.line === lineIndex);
+            
+            for (let col = 0; col < this.cols; col++) {
+                // TEMPORARY logic
+                const color = lineTokens.reduce((acc, token) => {
+                    const tokenStartCol = token.start - lineStart;
+                    if (col >= tokenStartCol && col < tokenStartCol + (token.end - token.start)) {
+                        return this.theme[token.type] || this.theme.default;
+                    }
+                    return acc;
+                }, this.theme.default);
+                
+                // Fill to the end
+                this._updateVertex(col, row, lineText[col] || 0, color[0], color[1], color[2], color[3]);
+            }
+        }
+
+        this.render();
+    }
+
+    // TODO: Virtual scrolling without re-rendering the screen
+    #renderSeek(col, row) {
+        // console.log("Virtual scroll to", col, row);
+        this.#renderScreen(this.state, true);
     }
 
     destroy(destroyState = true) {
         if(this.destroyed) return;
         super.destroy();
+
         if(destroyState) {
             this.state.destroy();
         }
+
         this.state = null;
         this.theme = null;
         this.renderEditorFrame = null;
@@ -1284,3 +1524,4 @@ class CodeEditor extends AcceleratedTextGridRenderer {
 window.CodeEditor = CodeEditor;
 window.EditorState = EditorState;
 window.AcceleratedTextGridRenderer = AcceleratedTextGridRenderer;
+window.MutableTextField = MutableTextField;

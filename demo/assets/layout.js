@@ -133,6 +133,32 @@ const LAYOUT_SCHEMA_PRESETS = {
             { inner: [{ type: 'slot', view: 'ASTView', resize: { width: "50%" } }, { type: 'slot', view: 'LogsView' }], resize: { height: "50%" } }
         ]
     },
+
+    /**
+    * |       |
+    * |       |
+    * |       |
+    */
+    'editor-only': {
+        title: "Editor only",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'EditorView' }
+        ]
+    },
+
+    /**
+    * |       |
+    * |       |
+    * |       |
+    */
+    'terminal-only': {
+        title: "Terminal only",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'TerminalView' }
+        ]
+    },
 };
 
 /**

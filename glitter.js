@@ -364,11 +364,14 @@ lang._UNITCHARS = new Set([...lang.units.keys()].map(unit => unit.charCodeAt(0))
  * Token class representing a lexical token
  */
 class Token {
+    static writeValues = true;
+    static arrayTokens = false;
+
     constructor(type, value, start, end) {
-        this.type = type?.toString();
-        this.value = value?.toString();
+        this.type = type;//?.toString();
         this.start = start;
         this.end = end;
+        if(Token.writeValues && value !== undefined && value !== null) this.value = value?.toString();
     }
 
     matches(type, value = null) {
@@ -376,6 +379,14 @@ class Token {
         if(value !== null && this.value !== value) return false;
         return true;
     }
+}
+
+function __createToken(type, value, start, end) {
+    if(Token.arrayTokens) {
+        return [type, start, end];
+    }
+
+    return new Token(type, value, start, end);
 }
 
 /**helper*/ class StringView {
@@ -585,6 +596,12 @@ class LexerState extends State {
         this.valueStart = 0;
 
         this.tokens = [];
+
+        Token.writeValues = options.writeTokenValues !== false;
+        this.lineMap = Token.arrayTokens = options.asLineMap === true;
+        if(this.lineMap) {
+            this.lineMapData = [];
+        }
     }
 
     isEnd() {
@@ -592,6 +609,11 @@ class LexerState extends State {
     }
 
     push(token) {
+        if(this.lineMap) {
+            this.lineMapData.push(token[0], token[1], token[2]);
+            return;
+        }
+
         if(!(token instanceof Token)) {
             this.error("Lexer attempted to push non-Token object to tokens list");
         }
@@ -652,7 +674,7 @@ function continueLexing(state) {
             state.column = 1;
 
             if(!state.inString && state.tokens.length > 0 && state.tokens[state.tokens.length - 1].type !== lang.TOKEN_NL) {
-                state.push(new Token(lang.TOKEN_NL, null, state.position, state.position + 1));
+                state.push(__createToken(lang.TOKEN_NL, null, state.position, state.position + 1));
             }
 
             // Line range filtering
@@ -667,7 +689,7 @@ function continueLexing(state) {
                 state.inString = false;
                 state.stringDelimiter = null;
                 let value = state.get_value();
-                state.push(new Token(lang.TOKEN_STRING, value));
+                state.push(__createToken(lang.TOKEN_STRING, value));
                 state.set_state(lang.STATE_DEFAULT);
                 continue;
             }
@@ -702,7 +724,7 @@ function continueLexing(state) {
 
                 if(state.options.keepComments) {
                     let comment = state.sourceView.substring(state.position, endIdx);
-                    state.push(new Token(lang.TOKEN_COMMENT, comment, state.position, endIdx));
+                    state.push(__createToken(lang.TOKEN_COMMENT, comment, state.position, endIdx));
                 }
 
                 state.position = endIdx - 1;
@@ -739,7 +761,7 @@ function continueLexing(state) {
 
                 if(state.options.keepComments) {
                     let comment = state.sourceView.substring(state.position + 2, idx);
-                    state.push(new Token(lang.TOKEN_COMMENT, comment, ogPosition));
+                    state.push(__createToken(lang.TOKEN_COMMENT, comment, ogPosition));
                 }
                 continue;
             }
@@ -748,7 +770,7 @@ function continueLexing(state) {
                 state.set_state(lang.STATE_IDENTIFIER);
 
                 if(isEnd) {
-                    state.push(new Token(lang.TOKEN_IDENTIFIER, String.fromCharCode(char)));
+                    state.push(__createToken(lang.TOKEN_IDENTIFIER, String.fromCharCode(char)));
                     break;
                 }
 
@@ -758,7 +780,7 @@ function continueLexing(state) {
 
             if(lang.isDigit(char)) {
                 if(isEnd) {
-                    state.push(new Token(lang.TOKEN_NUMBER, String.fromCharCode(char)) );
+                    state.push(__createToken(lang.TOKEN_NUMBER, String.fromCharCode(char)) );
                     break;
                 }
 
@@ -781,19 +803,19 @@ function continueLexing(state) {
 
             // Opening braces
             if(lang.BRACKETS.OPENING.has(char)) {
-                state.push(new Token(lang.TOKEN_OPENING_BRACE, String.fromCharCode(char)));
+                state.push(__createToken(lang.TOKEN_OPENING_BRACE, String.fromCharCode(char)));
                 continue;
             }
 
             // Closing braces
             if(lang.BRACKETS.CLOSING.has(char)) {
-                state.push(new Token(lang.TOKEN_CLOSING_BRACE, String.fromCharCode(char)));
+                state.push(__createToken(lang.TOKEN_CLOSING_BRACE, String.fromCharCode(char)));
                 continue;
             }
 
             // Semicolon
             if(char === 59) { // ;
-                state.push(new Token(lang.TOKEN_SEMICOLON));
+                state.push(__createToken(lang.TOKEN_SEMICOLON));
                 continue;
             }
 
@@ -812,7 +834,7 @@ function continueLexing(state) {
                         break;
                     }
                 }
-                state.push(new Token(lang.TOKEN_OPERATOR, opStr, startPos, state.position + 1));
+                state.push(__createToken(lang.TOKEN_OPERATOR, opStr, startPos, state.position + 1));
                 continue;
             }
 
@@ -833,13 +855,13 @@ function continueLexing(state) {
             let value = state.get_value(1);
 
             if(lang.declares.has(value)) {
-                state.push(new Token(lang.TOKEN_DECLARATION, value));
+                state.push(__createToken(lang.TOKEN_DECLARATION, value));
             } else if(lang.keywords.has(value)) {
-                state.push(new Token(lang.TOKEN_KEYWORD, value));
+                state.push(__createToken(lang.TOKEN_KEYWORD, value));
             } else if (value === "true" || value === "false" || value === "null" || value === "undefined") {
-                state.push(new Token(lang.TOKEN_LITERAL, value));
+                state.push(__createToken(lang.TOKEN_LITERAL, value));
             } else {
-                state.push(new Token(lang.TOKEN_IDENTIFIER, value));
+                state.push(__createToken(lang.TOKEN_IDENTIFIER, value));
             }
 
             state.val_start();
@@ -862,7 +884,7 @@ function continueLexing(state) {
                     }
 
                     let value = state.get_value(isEnd? 1 : 0);
-                    state.push(new Token(lang.TOKEN_NUMBER, value));
+                    state.push(__createToken(lang.TOKEN_NUMBER, value));
                     state.val_start();
                     state.set_state(lang.STATE_DEFAULT);
                     if(!isEnd) {
@@ -891,14 +913,14 @@ function continueLexing(state) {
             if(!isDigit && char !== 46) state.position--;
             let value = state.get_value(1);
 
-            state.push(new Token(lang.TOKEN_NUMBER, value));
+            state.push(__createToken(lang.TOKEN_NUMBER, value));
             state.val_start();
             state.set_state(lang.STATE_DEFAULT);
             continue;
         }
     }
 
-    return state.tokens;
+    return state.lineMap ? state.lineMapData : state.tokens;
 }
 
 /**
