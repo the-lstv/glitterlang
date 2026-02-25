@@ -20,18 +20,28 @@ void main() {
 `;
 
 const msdfVertex = `#version 300 es
-in vec2 a_position;
-in vec2 a_texCoord;
-in vec4 a_color;
-uniform vec2 uOffset;
+
+in vec2 a_quad;
+
+in vec2 i_pos;
+in vec2 i_size;
+in vec4 i_uvRect;
+in vec4 i_color;
+
 uniform mat4 uProjection;
+uniform vec2 uOffset;
+
 out vec2 v_texCoord;
 out vec4 v_color;
 
 void main() {
-    gl_Position = uProjection * vec4(a_position + uOffset, 0.0, 1.0);
-    v_texCoord = a_texCoord;
-    v_color = a_color;
+    vec2 pos = i_pos + (a_quad * i_size);
+    gl_Position = uProjection * vec4(pos + uOffset, 0.0, 1.0);
+
+    vec2 uv = i_uvRect.xy + (a_quad * 0.5 + 0.5) * i_uvRect.zw;
+
+    v_texCoord = uv;
+    v_color = i_color;
 }
 `;
 
@@ -181,7 +191,7 @@ class AcceleratedTextGridRenderer {
         this.frameScheduler = new LS.Util.FrameScheduler(this.#render.bind(this));
 
         this.font = null;
-        this.indexCount = 0;
+        this.instanceCount = 0;
         this.gridDirty = false;
 
         this.fontSize = 16;
@@ -367,39 +377,16 @@ class AcceleratedTextGridRenderer {
         const numCells = cols * rows;
 
         // Backing buffers to remember grid state for resizing
-        this.gridBuffer = new Uint8ClampedArray(numCells * 5); // char code + 4 color components; big limitation is that only ASCII is covered
-        this.gridBuffer.fill(255); // 1.0 in 0-255 range (20 down to 5 bytes compared to floats)
+        this.gridBuffer = new Uint8ClampedArray(numCells); // char code; big limitation is that only ASCII is covered
 
-        // Fill charcodes to 0 (space) by default
-        for(let i = 0; i < numCells; i++) {
-            this.gridBuffer[i * 5] = 0;
-        }
-
-        // 4 vertices per cell, 8 floats per vertex (x, y, u, v, r, g, b, a)
-        this.vertexData = new Float32Array(numCells * 4 * 8);
-        this.indexData = new Uint32Array(numCells * 6);
-
-        let iIdx = 0;
-        let vertexOffset = 0;
-
-        for (let i = 0; i < numCells; i++) {
-            this.indexData[iIdx++] = vertexOffset + 0;
-            this.indexData[iIdx++] = vertexOffset + 1;
-            this.indexData[iIdx++] = vertexOffset + 2;
-            this.indexData[iIdx++] = vertexOffset + 0;
-            this.indexData[iIdx++] = vertexOffset + 2;
-            this.indexData[iIdx++] = vertexOffset + 3;
-            vertexOffset += 4;
-        }
+        // Per-instance data: i_pos(2), i_size(2), i_uvRect(4), i_color(4)
+        this.vertexData = new Float32Array(numCells * 12);
 
         const gl = this.gl;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, this.vertexData, gl.DYNAMIC_DRAW);
 
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.indexData, gl.STATIC_DRAW);
-
-        this.indexCount = this.indexData.length;
+        this.instanceCount = numCells;
         this.gridDirty = false;
     }
 
@@ -444,87 +431,61 @@ class AcceleratedTextGridRenderer {
         // Dirty glyph (for now we only care to render if glyph changes through this function)
         let updateChar = false;//, updateColor = false;
 
-        const bufferIdx = cellIdx * 5;
         if(charCode !== undefined) {
-            updateChar = this.gridBuffer[bufferIdx] !== charCode;
-            this.gridBuffer[bufferIdx] = charCode;
+            updateChar = this.gridBuffer[cellIdx] !== charCode;
+            this.gridBuffer[cellIdx] = charCode;
         } else if(r === undefined && g === undefined && b === undefined && a === undefined) {
             return; // No updates needed
         }
 
-        // Set & readback (we need to do that to ensure the value is rounded to Float32 precision)
-        if(r !== undefined) this.gridBuffer[bufferIdx + 1] = r * 255; r = this.gridBuffer[bufferIdx + 1] / 255;
-        if(g !== undefined) this.gridBuffer[bufferIdx + 2] = g * 255; g = this.gridBuffer[bufferIdx + 2] / 255;
-        if(b !== undefined) this.gridBuffer[bufferIdx + 3] = b * 255; b = this.gridBuffer[bufferIdx + 3] / 255;
-        if(a !== undefined) this.gridBuffer[bufferIdx + 4] = a * 255; a = this.gridBuffer[bufferIdx + 4] / 255;
-
         const v = this.vertexData;
-        const vIdx = cellIdx * 32; // 4 verts * 8 floats
+        const vIdx = cellIdx * 12;
 
         this.gridDirty = true;
 
         // It would be more readable to use inline enums but JS doesn't have that
         // Maybe one day I'll rewrite this in Glitter 🤔
 
-        // Set cell color
-        // TODO: Use Uint8 rather than 16 floats per cell
-        v[vIdx +  4] = r;
-        v[vIdx +  5] = g;
-        v[vIdx +  6] = b;
-        v[vIdx +  7] = a;
-        v[vIdx + 12] = r;
-        v[vIdx + 13] = g;
-        v[vIdx + 14] = b;
-        v[vIdx + 15] = a;
-        v[vIdx + 20] = r;
-        v[vIdx + 21] = g;
-        v[vIdx + 22] = b;
-        v[vIdx + 23] = a;
-        v[vIdx + 28] = r;
-        v[vIdx + 29] = g;
-        v[vIdx + 30] = b;
-        v[vIdx + 31] = a;
+        if(r !== undefined) v[vIdx + 8] = r;
+        if(g !== undefined) v[vIdx + 9] = g;
+        if(b !== undefined) v[vIdx + 10] = b;
+        if(a !== undefined) v[vIdx + 11] = a;
 
         if(!updateChar) return;
-
-        if(charCode < this.font._lowestCharCode) charCode = this.font._missingGlyphIndex;
-        else charCode = ((charCode - this.font._lowestCharCode) * 15) || this.font._missingGlyphIndex;
 
         const map = this.cmap;
         const x = col * this.cellWidth;
         const y = row * this.cellHeight;
-        const u0 = map[charCode + 7];
-        const v0 = map[charCode + 8];
-        const u1 = map[charCode + 9];
-        const v1 = map[charCode + 10];
-        const x0 = x  + map[charCode + 11];
-        const y0 = y  + map[charCode + 12];
-        const x1 = x0 + map[charCode + 13];
-        const y1 = y0 + map[charCode + 14];
 
-        // Top-Left
-        v[vIdx    ] = x0;
-        v[vIdx + 1] = y0;
-        v[vIdx + 2] = u0;
-        v[vIdx + 3] = v0;
+        let glyphIdx = this.font._missingGlyphIndex;
+        if (glyphIdx >= map.length) glyphIdx = 0;
+        if (charCode >= this.font._lowestCharCode) {
+            const idx = (charCode - this.font._lowestCharCode) * 15;
+            if (idx >= 0 && idx < map.length) glyphIdx = idx;
+        }
 
-        // Top-Right
-        v[vIdx + 8] = x1;
-        v[vIdx + 9] = y0;
-        v[vIdx + 10] = u1;
-        v[vIdx + 11] = v0;
+        const u0 = map[glyphIdx + 7];
+        const v0 = map[glyphIdx + 8];
+        const u1 = map[glyphIdx + 9];
+        const v1 = map[glyphIdx + 10];
+        const width = map[glyphIdx + 13];
+        const height = map[glyphIdx + 14];
+        const x0 = x + map[glyphIdx + 11];
+        const y0 = y + map[glyphIdx + 12];
 
-        // Bottom-Right
-        v[vIdx + 16] = x1;
-        v[vIdx + 17] = y1;
-        v[vIdx + 18] = u1;
-        v[vIdx + 19] = v1;
+        const uWidth = u1 - u0;
+        const vHeight = v1 - v0;
+        const halfWidth = width * 0.5;
+        const halfHeight = height * 0.5;
 
-        // Bottom-Left
-        v[vIdx + 24] = x0;
-        v[vIdx + 25] = y1;
-        v[vIdx + 26] = u0;
-        v[vIdx + 27] = v1;
+        v[vIdx] = x0 + halfWidth;       // i_pos.x (center)
+        v[vIdx + 1] = y0 + halfHeight;  // i_pos.y (center)
+        v[vIdx + 2] = halfWidth;        // i_size.x (half width)
+        v[vIdx + 3] = halfHeight;       // i_size.y (half height)
+        v[vIdx + 4] = u0;               // uv.x
+        v[vIdx + 5] = v0;               // uv.y
+        v[vIdx + 6] = uWidth;           // uv.w
+        v[vIdx + 7] = vHeight;          // uv.h
     }
 
     #render() {
@@ -537,14 +498,14 @@ class AcceleratedTextGridRenderer {
             this.frameFunction();
         }
 
+        if (!this.font || this.instanceCount === 0) return;
+
         const cw = this.canvas.width;
         const ch = this.canvas.height;
 
         const gl = this.gl;
         gl.viewport(0, 0, cw, ch);
         gl.clear(gl.COLOR_BUFFER_BIT);
-
-        if (!this.font || this.indexCount === 0) return;
 
         this.updateBuffers();
 
@@ -605,7 +566,7 @@ class AcceleratedTextGridRenderer {
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         gl.uniform1i(locations.texture, 0);
         gl.bindVertexArray(this.vao);
-        gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.instanceCount);
         gl.bindVertexArray(null);
     }
 
@@ -804,9 +765,11 @@ class AcceleratedTextGridRenderer {
 
         this.locations = {
             // -- Text rendering program locations
-            position: gl.getAttribLocation(this.program, "a_position"),
-            texCoord: gl.getAttribLocation(this.program, "a_texCoord"),
-            color: gl.getAttribLocation(this.program, "a_color"),
+            quad: gl.getAttribLocation(this.program, "a_quad"),
+            i_pos: gl.getAttribLocation(this.program, "i_pos"),
+            i_size: gl.getAttribLocation(this.program, "i_size"),
+            i_uvRect: gl.getAttribLocation(this.program, "i_uvRect"),
+            i_color: gl.getAttribLocation(this.program, "i_color"),
             projection: gl.getUniformLocation(this.program, "uProjection"),
             texture: gl.getUniformLocation(this.program, "u_texture"),
             pxRange: gl.getUniformLocation(this.program, "u_pxRange"),
@@ -828,21 +791,38 @@ class AcceleratedTextGridRenderer {
             this.vao = gl.createVertexArray();
             gl.bindVertexArray(this.vao);
 
+            const quadData = new Float32Array([
+                -1, -1,
+                1, -1,
+                -1, 1,
+                1, 1
+            ]);
+            this.quadBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, quadData, gl.STATIC_DRAW);
+
+            gl.enableVertexAttribArray(this.locations.quad);
+            gl.vertexAttribPointer(this.locations.quad, 2, gl.FLOAT, false, 0, 0);
+
             this.vertexBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
 
-            // Stride is 32 bytes (8 floats * 4 bytes)
-            gl.enableVertexAttribArray(this.locations.position);
-            gl.vertexAttribPointer(this.locations.position, 2, gl.FLOAT, false, 32, 0);
+            const stride = 12 * 4;
+            gl.enableVertexAttribArray(this.locations.i_pos);
+            gl.vertexAttribPointer(this.locations.i_pos, 2, gl.FLOAT, false, stride, 0);
+            gl.vertexAttribDivisor(this.locations.i_pos, 1);
 
-            gl.enableVertexAttribArray(this.locations.texCoord);
-            gl.vertexAttribPointer(this.locations.texCoord, 2, gl.FLOAT, false, 32, 8);
+            gl.enableVertexAttribArray(this.locations.i_size);
+            gl.vertexAttribPointer(this.locations.i_size, 2, gl.FLOAT, false, stride, 8);
+            gl.vertexAttribDivisor(this.locations.i_size, 1);
 
-            gl.enableVertexAttribArray(this.locations.color);
-            gl.vertexAttribPointer(this.locations.color, 4, gl.FLOAT, false, 32, 16);
+            gl.enableVertexAttribArray(this.locations.i_uvRect);
+            gl.vertexAttribPointer(this.locations.i_uvRect, 4, gl.FLOAT, false, stride, 16);
+            gl.vertexAttribDivisor(this.locations.i_uvRect, 1);
 
-            this.indexBuffer = gl.createBuffer();
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+            gl.enableVertexAttribArray(this.locations.i_color);
+            gl.vertexAttribPointer(this.locations.i_color, 4, gl.FLOAT, false, stride, 32);
+            gl.vertexAttribDivisor(this.locations.i_color, 1);
 
             gl.bindVertexArray(null);
 
@@ -927,7 +907,7 @@ class AcceleratedTextGridRenderer {
         let text = "";
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
-                const charCode = this.gridBuffer[(row * this.cols + col) * 5];
+                const charCode = this.gridBuffer[row * this.cols + col];
                 text += charCode ? String.fromCharCode(charCode) : " ";
             }
             text += "\n";
@@ -954,6 +934,7 @@ class AcceleratedTextGridRenderer {
         if (this.destroyed) return;
         if (this.vertexBuffer) this.gl.deleteBuffer(this.vertexBuffer);
         if (this.indexBuffer) this.gl.deleteBuffer(this.indexBuffer);
+        if (this.quadBuffer) this.gl.deleteBuffer(this.quadBuffer);
         if (this.texture) this.gl.deleteTexture(this.texture);
         if (this.program) this.gl.deleteProgram(this.program);
         if (this.rectProgram) this.gl.deleteProgram(this.rectProgram);
@@ -964,6 +945,7 @@ class AcceleratedTextGridRenderer {
         this.gridBuffer = null;
         this.cmap = null;
         this.font = null;
+        this.instanceCount = 0;
         this.frameFunction = null;
         this.onVirtualScroll = null;
         this.textSelection = null;
@@ -990,6 +972,7 @@ class AcceleratedTextGridRenderer {
         this.vao = null;
         this.rectVao = null;
         this.indexBuffer = null;
+        this.quadBuffer = null;
         this.texture = null;
         this.vertexBuffer = null;
         this.destroyed = true;
@@ -1469,6 +1452,10 @@ class CodeEditor extends AcceleratedTextGridRenderer {
 
     setText(text) {
         this.state.load(text);
+
+        // TEMPORARY
+        // Later we should stream tokenization
+        this.tokens = Glitter.tokenize(this.state.getData(), { writeTokenValues: false, asLineMap: true });
     }
     
     getText() {
@@ -1484,11 +1471,7 @@ class CodeEditor extends AcceleratedTextGridRenderer {
     #renderScreen(state, virtual = false) {
         if(!state || !state.lines || state !== this.state) return;
 
-        // TEMPORARY
-        // Later we should stream tokenization
-        this.tokens = Glitter.tokenize(state.getData(), { writeTokenValues: false, asLineMap: true });
-
-        console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
+        // console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
 
         // Render visible lines
         for (let row = 0; row < this.rows; row++) {
