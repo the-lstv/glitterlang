@@ -1,5 +1,8 @@
 const events = new LS.EventEmitter();
 
+window.b = s => new TextEncoder().encode(s); // b`string`
+window.s = b => new TextDecoder().decode(b);
+
 class EditorView extends View {
     constructor() {
         super({

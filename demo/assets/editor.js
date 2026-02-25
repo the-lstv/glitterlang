@@ -234,7 +234,7 @@ class AcceleratedTextGridRenderer {
         }
 
         if (newOptions.welcomeMsg) {
-            this.welcomeMsg = newOptions.welcomeMsg.split('\n');;
+            this.welcomeMsg = newOptions.welcomeMsg.split('\n');
         }
 
         if (newOptions.limitFPS) {
@@ -1427,7 +1427,7 @@ class CodeEditor extends AcceleratedTextGridRenderer {
 
         this.theme = {
             default: tempColor.set(theme && theme.default || "#aaaaaa").floatPixel,
-            identifier: tempColor.set(theme && theme.identifier || "#4488ff").floatPixel,
+            identifier: tempColor.set(theme && theme.identifier || "#a8bbdb").floatPixel,
             keyword: tempColor.set(theme && theme.keyword || "#ff4488").floatPixel,
             string: tempColor.set(theme && theme.string || "#44ff44").floatPixel,
             number: tempColor.set(theme && theme.number || "#ff8844").floatPixel,
@@ -1436,18 +1436,20 @@ class CodeEditor extends AcceleratedTextGridRenderer {
             operator: tempColor.set(theme && theme.operator || "#8888ff").floatPixel,
             background: tempColor.set(theme && theme.background || "#000000").floatPixel,
             selection: tempColor.set(theme && theme.selection || "#ffffff88").floatPixel,
-            comment: tempColor.set(theme && theme.comment || "#888888").floatPixel
+            comment: tempColor.set(theme && theme.comment || "#4b4b4b").floatPixel
         };
 
         // Map to Glitter tokens (temporary)
-        this.theme[Glitter.lang.TOKEN_KEYWORD] = this.theme.keyword;
-        this.theme[Glitter.lang.TOKEN_DECLARATION] = this.theme.keyword;
-        this.theme[Glitter.lang.TOKEN_IDENTIFIER] = this.theme.identifier;
-        this.theme[Glitter.lang.TOKEN_STRING] = this.theme.string;
-        this.theme[Glitter.lang.TOKEN_NUMBER] = this.theme.number;
-        this.theme[Glitter.lang.TOKEN_UNIT] = this.theme.number_unit || this.theme.number;
-        this.theme[Glitter.lang.TOKEN_OPERATOR] = this.theme.operator;
-        this.theme[Glitter.lang.TOKEN_CLOSING_BRACE] = this.theme[Glitter.lang.TOKEN_OPENING_BRACE] = this.theme.braces;
+        this.theme.tokens = [];
+        this.theme.tokens[Glitter.lang.TOKEN_KEYWORD] = this.theme.keyword;
+        this.theme.tokens[Glitter.lang.TOKEN_DECLARATION] = this.theme.keyword;
+        this.theme.tokens[Glitter.lang.TOKEN_IDENTIFIER] = this.theme.identifier;
+        this.theme.tokens[Glitter.lang.TOKEN_STRING] = this.theme.string;
+        this.theme.tokens[Glitter.lang.TOKEN_NUMBER] = this.theme.number;
+        this.theme.tokens[Glitter.lang.TOKEN_UNIT] = this.theme.number_unit || this.theme.number;
+        this.theme.tokens[Glitter.lang.TOKEN_OPERATOR] = this.theme.operator;
+        this.theme.tokens[Glitter.lang.TOKEN_CLOSING_BRACE] = this.theme.tokens[Glitter.lang.TOKEN_OPENING_BRACE] = this.theme.braces;
+        this.theme.tokens[Glitter.lang.TOKEN_COMMENT] = this.theme.comment;
 
         this.setOptions({ backgroundColor: this.theme.background });
         this.render();
@@ -1457,11 +1459,10 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         this.setTheme(CodeEditor.fromVSCodeTheme(theme));
     }
 
-    init(options = {}) {
+    async init(options = {}) {
         const promise = super.init(options);
-        return promise.then(() => {
-            this.#renderScreen(this.state);
-        });
+        await promise;
+        this.#renderScreen(this.state);
     }
 
     switchState(newState) {}
@@ -1508,12 +1509,11 @@ class CodeEditor extends AcceleratedTextGridRenderer {
             let col = 0;
 
             if (lineTokens && lineTokens.length > 0) {
-
                 for (const token of lineTokens) {
                     // console.log("Token", token, "from", tokenStartCol, "to", token[2] - lineStart);
-                    for (; col < this.cols && col < token[2]; col++) {
+                    for (; col < this.cols && col < (token[2] - lineStart); col++) {
                         const charCode = lineText[col] || 32;
-                        let color = this.theme[token[0]] || this.theme.default;
+                        let color = this.theme.tokens[token[0]] || this.theme.default;
                         this._updateVertex(col, row, charCode, color[0], color[1], color[2], color[3]);
                     }
                 }

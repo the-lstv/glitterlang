@@ -13,6 +13,215 @@
 
 const isNode = typeof process !== "undefined" && process.versions != null && process.versions.node != null;
 
+// --- Utilities ---
+
+function __s2u8(str) {
+    const len = str.length;
+
+    if(len === 0) return EMPTY_U8;
+    if(len === 1) return new Uint8Array([str.charCodeAt(0)]);
+
+    // A loop is faster under ~2000 chars.
+    // After that the encoder overhead catches up to JS loop overhead and becomes faster
+    // Warning: this loop only handles ASCII, utf8 should be supported eventually
+    // Not yet because the renderer itself currently only handles ASCII
+    if(len <= 2000) {
+        const buf = new Uint8Array(len);
+        for(let i = 0; i < len; i++) {
+            buf[i] = str.charCodeAt(i);
+        }
+        return buf;
+    }
+
+    return textEncoder.encode(str);
+}
+
+function smallu8hash(uint8) {
+    let hash = 0;
+    for (let i = 0; i < uint8.length; i++) {
+        // Math.imul is faster for small inputs, slower than "hash << 5" for larger inputs
+        // Since this is primarily for small strings it's prefferable
+        hash = Math.imul(31, hash) + uint8[i];
+        hash |= 0;
+    }
+    return hash >>> 0;
+}
+
+function equalU8(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
+// Strings suck
+// Sadly we need this stupid helper to get lookups for u8
+// In the native version this can be done with a regular set, so we don't need to waste so much work
+class svSet extends Set {
+    constructor(iterable) {
+        super(iterable);
+
+        this.u8H = new Set();
+        this.u8M = new Map();
+        this.max = 0;
+
+        if(iterable) {
+            for(const item of iterable) {
+                this._add(item);
+            }
+        }
+    }
+
+    add(value) {
+        this._add(value);
+        return super.add(value);
+    }
+
+    _add(value) {
+        if(typeof value !== "string" || !this.u8H) return;
+        const u8 = __s2u8(value);
+        const h = smallu8hash(u8);
+        this.u8H.add(h);
+        this.u8M.set(h, u8);
+        this.max = Math.max(this.max, value.length);
+    }
+
+    has(value) {
+        if(value instanceof Uint8Array) {
+            if(value.length === 0 || value.length > this.max) {
+                return false;
+            }
+
+            const hash = smallu8hash(value);
+            if(this.u8H.has(hash)) {
+                // We should *technically* check this to avoid collisions
+                // But uhh... In practice it should be good enough and it's quite slow to compare, so for now it's kept like this
+                // if(equalU8(value, this.u8M.get(hash))) {
+                //     return true;
+                // }
+                return true;
+            }
+
+            return false;
+        }
+        return super.has(value);
+    }
+}
+
+class svMap extends Map {
+    constructor(iterable) {
+        super(iterable);
+
+        this.u8H = new Set();
+        this.u8M = new Map();
+        this.max = 0;
+
+        if(iterable) {
+            for(const [key, value] of iterable) {
+                this._add(key, value);
+            }
+        }
+    }
+
+    set(key, value) {
+        this._add(key, value);
+        return super.set(key, value);
+    }
+
+    _add(key, value) {
+        if(typeof key !== "string" || !this.u8H) return;
+        const u8 = __s2u8(key);
+        const h = smallu8hash(u8);
+        this.u8H.add(h);
+        this.u8M.set(h, [u8, value]);
+        this.max = Math.max(this.max, key.length);
+    }
+
+    get(key) {
+        if(key instanceof Uint8Array) {
+            if(key.length === 0 || key.length > this.max) {
+                return undefined;
+            }
+            const hash = smallu8hash(key);
+            if(this.u8H.has(hash)) {
+                const [storedKey, storedValue] = this.u8M.get(hash);
+                if(equalU8(key, storedKey)) {
+                    return storedValue;
+                }
+            }
+        }
+        return super.get(key);
+    }
+
+    has(key) {
+        if(key instanceof Uint8Array) {
+            if(key.length === 0 || key.length > this.max) {
+                return false;
+            }
+            const hash = smallu8hash(key);
+            if(this.u8H.has(hash)) {
+                const [storedKey] = this.u8M.get(hash);
+                if(equalU8(key, storedKey)) {
+                    return true;
+                }
+            }
+        }
+
+        return super.has(key);
+    }
+}
+
+class StringView extends Uint8Array {
+    isView = true;
+
+    constructor(buf, byteOffset = 0, length) {
+        if (buf instanceof Uint8Array) {
+            super(buf.buffer, buf.byteOffset + byteOffset, length ?? (buf.length - byteOffset));
+        } else if (buf instanceof ArrayBuffer) {
+            super(buf, byteOffset, length);
+        } else {
+            throw new TypeError("Expected ArrayBuffer or Uint8Array");
+        }
+    }
+
+    charCodeAt(index) {
+        return this[index];
+    }
+
+    substring(start = 0, end = this.length) {
+        let s = start < 0 ? this.length + start : start;
+        let e = end < 0 ? this.length + end : end;
+        s = Math.max(0, s);
+        e = Math.min(this.length, e);
+        if (e < s) e = s;
+        return new StringView(this.buffer, this.byteOffset + s, e - s);
+    }
+
+    toString() {
+        return new TextDecoder().decode(this);
+    }
+
+    static fromString(str) {
+        const encoder = new TextEncoder();
+        return StringView.fromBuffer(encoder.encode(str));
+    }
+
+    /**
+     * Creates a zero-copy StringView from an ArrayBuffer or Uint8Array
+     * If the input is already a StringView, it is returned as-is
+     * @param {ArrayBuffer|Uint8Array|StringView} buffer The buffer to create a StringView from
+     * @return {StringView} The created StringView
+     */
+    static fromBuffer(buffer) {
+        if(buffer instanceof StringView) {
+            return buffer;
+        }
+
+        return new StringView(buffer instanceof ArrayBuffer ? buffer : buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+}
+
 /**
  * Language definitions and helpers
  */
@@ -89,7 +298,7 @@ const lang = {
 
     // --- Language definitions ---
 
-    declares: new Set([
+    declares: new svSet([
         "var",
         "let",
         "const",
@@ -110,7 +319,7 @@ const lang = {
         "using"
     ]),
 
-    keywords: new Set([
+    keywords: new svSet([
         "if", "else",
         "while", "do", "for",
         "switch", "case", "default",
@@ -127,7 +336,7 @@ const lang = {
         "export"
     ]),
 
-    specials: new Set([
+    specials: new svSet([
         "intern",
         "extern",
         "macro",
@@ -137,7 +346,7 @@ const lang = {
     ]),
 
     // Spec defined global constants and functions, every backend may implement these differently, but accurately
-    constants: new Map([
+    constants: new svMap([
         ["π", "3.141592653589793"],
         ["Π", "3.141592653589793"],
         ["PI", "3.141592653589793"],
@@ -176,7 +385,7 @@ const lang = {
 
     // Literals can have units (e.g. 5ms, 10s, 3h, 2d), which maps to their base value (eg. milliseconds)
     // These must be used explicitly (eg. fn (duration: Duration) {})
-    units: new Map([
+    units: new svMap([
         ["ms", { ns: "Duration", multiplier: 1, base: true }],
         ["s",  { ns: "Duration", multiplier: 1000 }],
         ["m",  { ns: "Duration", multiplier: 60000 }],
@@ -217,7 +426,7 @@ const lang = {
     ]),
 
     // Operator tokens
-    operators: new Set([
+    operators: new svSet([
         // Arithmetic
         "+", "-", "*", "/", "%", "++", "--", "**",
 
@@ -278,6 +487,15 @@ const lang = {
     BRACKETS: {
         OPENING: new Set([40, 91, 123, 60]),
         CLOSING: new Set([41, 93, 125, 62]),
+
+        // Methods may be faster than a set for small values
+        isOpening(char) {
+            return char === 40 || char === 91 || char === 123 || char === 60; // ( [ { <
+        },
+
+        isClosing(char) {
+            return char === 41 || char === 93 || char === 125 || char === 62; // ) ] } >
+        }
     },
 
 
@@ -355,7 +573,11 @@ const util = {
         }
         if(value === undefined) return { type: lang.TYPE_LITERAL, value, typeOf: "undefined" };
         throw new Error(`Unsupported literal type: ${typeof value}`);
-    }
+    },
+
+    StringView,
+    svSet,
+    svMap
 };
 
 lang._OPCHARS = new Set([...lang.operators].map(op => op.charCodeAt(0)));
@@ -388,39 +610,6 @@ function __createToken(type, value, start, end) {
     }
 
     return new Token(type, value, start, end);
-}
-
-/**helper*/ class StringView {
-    isView = true;
-
-    constructor(buffer) {
-        this.u8 = (buffer instanceof Uint8Array || (typeof Buffer !== "undefined" && Buffer.isBuffer(buffer))) ? buffer : new Uint8Array(buffer);
-    }
-
-    charCodeAt(index) {
-        return this.u8[index];
-    }
-
-    get length() {
-        return this.u8.length;
-    }
-
-    substring(start, end) {
-        return new StringView(this.u8.subarray(start, end));
-    }
-
-    toString() {
-        return new TextDecoder().decode(this.u8);
-    }
-
-    indexOf(searchValue, fromIndex = 0) {
-        return this.u8.indexOf(searchValue, fromIndex);
-    }
-
-    static fromString(str) {
-        const encoder = new TextEncoder();
-        return new StringView(encoder.encode(str));
-    }
 }
 
 /**
@@ -587,7 +776,7 @@ class LexerState extends State {
         this.line = 1;
         this.column = 1;
         this.source = source;
-        this.sourceView = typeof source === "string"? source: new StringView(source);
+        this.sourceView = typeof source === "string"? source: StringView.fromBuffer(source);
         this.inString = false;
         this.inTemplateString = false;
         this.stringDelimiter = null;
@@ -595,6 +784,12 @@ class LexerState extends State {
         this.set_state(lang.STATE_DEFAULT);
 
         this.valueStart = 0;
+        this.valueLine = 1;
+        this.valueColumn = 1;
+
+        this.stringStart = 0;
+        this.stringLine = 1;
+        this.stringColumn = 1;
 
         this.tokens = [];
 
@@ -611,10 +806,11 @@ class LexerState extends State {
 
     push(token) {
         if(this.lineMap) {
-            this.lineMapData[this.line] ??= [];
+            const line = (token.line || this.valueLine || this.line) - 1; // Arrays are zero-indexed
+            this.lineMapData[line] ??= [];
             if(!token[1]) token[1] = this.valueStart;
-            if(!token[2]) token[2] = this.position;
-            this.lineMapData[this.line].push(token);
+            if(!token[2]) token[2] = this.position + 1;
+            this.lineMapData[line].push(token);
             return;
         }
 
@@ -622,10 +818,10 @@ class LexerState extends State {
             this.error("Lexer attempted to push non-Token object to tokens list");
         }
 
-        token.start = token.start || this.valueStart;
-        token.end = token.end || this.position;
-        token.line = token.line || this.line;
-        token.column = token.column || this.column;
+        token.start = token.start ?? this.valueStart;
+        token.end = token.end ?? (this.position + 1);
+        token.line = token.line ?? this.valueLine ?? this.line;
+        token.column = token.column ?? this.valueColumn ?? this.column;
         this.tokens.push(token);
     }
 
@@ -644,19 +840,30 @@ class LexerState extends State {
         this.valueStart = 0;
     }
 
-    val_start(offset = 0) {
+    val_start(offset = 0, line = this.line, column = this.column) {
         this.valueStart = this.position + offset;
+        this.valueLine = line;
+        this.valueColumn = column + offset;
     }
 
     get_value(offset = 0) {
         return this.sourceView.substring(this.valueStart, this.position + offset);
     }
 
-    start_string(delim) {
+    val_start_at(position, line, column) {
+        this.valueStart = position;
+        this.valueLine = line;
+        this.valueColumn = column;
+    }
+
+    start_string(delim, line, column) {
         this.inString = true;
         this.stringDelimiter = delim;
         this.inTemplateString = (delim === 96);
-        this.val_start(1);
+        this.stringStart = this.position;
+        this.stringLine = line;
+        this.stringColumn = column;
+        this.val_start(1, line, column);
     }
 }
 /**
@@ -672,12 +879,15 @@ function continueLexing(state) {
     for(; state.position < state.sourceView.length; state.position++) {
         const isEnd = state.isEnd();
         let char = state.sourceView.charCodeAt(state.position);
+        const charLine = state.line;
+        const charColumn = state.column;
 
         if(char === 10) {
             state.line++;
             state.column = 1;
 
             if(!state.inString && state.tokens.length > 0 && state.tokens[state.tokens.length - 1].type !== lang.TOKEN_NL) {
+                state.val_start_at(state.position, charLine, charColumn);
                 state.push(__createToken(lang.TOKEN_NL, null, state.position, state.position + 1));
             }
 
@@ -693,7 +903,10 @@ function continueLexing(state) {
                 state.inString = false;
                 state.stringDelimiter = null;
                 let value = state.get_value();
-                state.push(__createToken(lang.TOKEN_STRING, value));
+                const tok = __createToken(lang.TOKEN_STRING, value, state.stringStart, state.position + 1);
+                tok.line = state.stringLine;
+                tok.column = state.stringColumn;
+                state.push(tok);
                 state.set_state(lang.STATE_DEFAULT);
                 continue;
             }
@@ -711,7 +924,7 @@ function continueLexing(state) {
 
             // String start
             if(lang.isStringDelimiter(char)) {
-                state.start_string(char);
+                state.start_string(char, charLine, charColumn);
 
                 if(isEnd) {
                     state.error("Unterminated string literal");
@@ -727,6 +940,7 @@ function continueLexing(state) {
                 }
 
                 if(state.options.keepComments) {
+                    state.val_start_at(state.position, charLine, charColumn);
                     let comment = state.sourceView.substring(state.position, endIdx);
                     state.push(__createToken(lang.TOKEN_COMMENT, comment, state.position, endIdx));
                 }
@@ -738,6 +952,8 @@ function continueLexing(state) {
             // Multi-line comments
             if(lang.isMLCommentStart(char, state.sourceView.charCodeAt(state.position + 1))) {
                 const ogPosition = state.position;
+                const ogLine = charLine;
+                const ogColumn = charColumn;
 
                 let idx = state.position + 2;
                 let endFound = false;
@@ -764,8 +980,9 @@ function continueLexing(state) {
                 state.position = idx + 1;
 
                 if(state.options.keepComments) {
+                    state.val_start_at(ogPosition, ogLine, ogColumn);
                     let comment = state.sourceView.substring(state.position + 2, idx);
-                    state.push(__createToken(lang.TOKEN_COMMENT, comment, ogPosition));
+                    state.push(__createToken(lang.TOKEN_COMMENT, comment, ogPosition, idx + 2));
                 }
                 continue;
             }
@@ -774,23 +991,25 @@ function continueLexing(state) {
                 state.set_state(lang.STATE_IDENTIFIER);
 
                 if(isEnd) {
+                    state.val_start_at(state.position, charLine, charColumn);
                     state.push(__createToken(lang.TOKEN_IDENTIFIER, String.fromCharCode(char)));
                     break;
                 }
 
-                state.val_start();
+                state.val_start(0, charLine, charColumn);
                 continue;
             }
 
             if(lang.isDigit(char)) {
                 if(isEnd) {
+                    state.val_start_at(state.position, charLine, charColumn);
                     state.push(__createToken(lang.TOKEN_NUMBER, String.fromCharCode(char)) );
                     break;
                 }
 
                 state.dotSeen = false;
                 state.set_state(lang.STATE_NUMBER);
-                state.val_start();
+                state.val_start(0, charLine, charColumn);
                 continue;
             }
 
@@ -800,25 +1019,28 @@ function continueLexing(state) {
                 if(lang.isDigit(nextChar)) {
                     state.dotSeen = true;
                     state.set_state(lang.STATE_NUMBER);
-                    state.val_start();
+                    state.val_start(0, charLine, charColumn);
                     continue;
                 }
             }
 
             // Opening braces
-            if(lang.BRACKETS.OPENING.has(char)) {
+            if(lang.BRACKETS.isOpening(char)) {
+                state.val_start_at(state.position, charLine, charColumn);
                 state.push(__createToken(lang.TOKEN_OPENING_BRACE, String.fromCharCode(char)));
                 continue;
             }
 
             // Closing braces
-            if(lang.BRACKETS.CLOSING.has(char)) {
+            if(lang.BRACKETS.isClosing(char)) {
+                state.val_start_at(state.position, charLine, charColumn);
                 state.push(__createToken(lang.TOKEN_CLOSING_BRACE, String.fromCharCode(char)));
                 continue;
             }
 
             // Semicolon
             if(char === 59) { // ;
+                state.val_start_at(state.position, charLine, charColumn);
                 state.push(__createToken(lang.TOKEN_SEMICOLON));
                 continue;
             }
@@ -826,6 +1048,8 @@ function continueLexing(state) {
             // Operators
             if(lang._OPCHARS.has(char)) {
                 let startPos = state.position;
+                let startLine = charLine;
+                let startColumn = charColumn;
                 let opStr = String.fromCharCode(char);
                 let nextChar = state.sourceView.charCodeAt(state.position + 1);
                 while(!isEnd) {
@@ -838,6 +1062,7 @@ function continueLexing(state) {
                         break;
                     }
                 }
+                state.val_start_at(startPos, startLine, startColumn);
                 state.push(__createToken(lang.TOKEN_OPERATOR, opStr, startPos, state.position + 1));
                 continue;
             }
@@ -850,7 +1075,7 @@ function continueLexing(state) {
 
         if(state.code === lang.STATE_IDENTIFIER) {
             const isIdent = lang.isIdentPart(char);
-            
+
             if(!isEnd && isIdent) {
                 continue;
             }
@@ -1501,8 +1726,6 @@ class Compiler_JavaScript extends Compiler {
             if(node.type === lang.TYPE_DECLARATION) {
                 let line = `${node.kind === "global" ? "" : node.kind} ${node.name}`;
                 if(node.init) {
-                    console.log(node.init);
-                    
                     line += ` = ${this.compileExpression(node.init)}`;
                 }
 
