@@ -209,6 +209,8 @@ class AcceleratedTextGridRenderer {
         this.virtualCol = 0;
         this.virtualRow = 0;
 
+        this.lineHeight = 1.2; // Line height multiplier for vertical spacing
+
         this.projMatrix = new Float32Array(16);
 
         this.rectData = new Float32Array(128 * 4); // Max 128 rectangles, each defined by 4 floats (x, y, width, height)
@@ -410,6 +412,16 @@ class AcceleratedTextGridRenderer {
         }
     }
 
+    /**
+     * Sets a character and color at the specified column and row in the grid if the position is valid.
+     * @param {number} col - Column of the cell to update
+     * @param {number} row - Row of the cell to update
+     * @param {number} charCode - Character code to set at the specified cell
+     * @param {number} r - Red color component (0-1)
+     * @param {number} g - Green color component (0-1)
+     * @param {number} b - Blue color component (0-1)
+     * @param {number} a - Alpha component (0-1)
+     */
     setChar(col, row, charCode, r = 1, g = 1, b = 1, a = 1) {
         if (col < 0 || col >= this.cols || row < 0 || row >= this.rows || !this.font) return;
         this._updateVertex(col, row, charCode, r, g, b, a);
@@ -455,7 +467,7 @@ class AcceleratedTextGridRenderer {
 
         const map = this.cmap;
         const x = col * this.cellWidth;
-        const y = row * this.cellHeight;
+        const y = (row * this.cellHeight) * this.lineHeight;
 
         let glyphIdx = this.font._missingGlyphIndex;
         if (glyphIdx >= map.length) glyphIdx = 0;
@@ -1096,6 +1108,7 @@ class MutableTextField {
         while(newSize - this.appendBufferUsed < capacity) {
             newSize *= 2;
         }
+
         const newBuffer = new Uint8Array(newSize);
         newBuffer.set(this.appendBuffer.subarray(0, this.appendBufferUsed));
         this.appendBuffer = newBuffer;
@@ -1293,18 +1306,10 @@ class MutableTextField {
         return textEncoder.encode(str);
     }
 
-    insertU8Char(at, char) {
-        const code = typeof char === "string" ? char.charCodeAt(0) : char;
-
-        if(code > 255) {
-            throw new Error("Character code exceeds 255");
-        }
-
-        this.ensure(1);
-        this.pieces.push([this.appendBufferUsed, 1, 1]);
-        this.appendBuffer[this.appendBufferUsed++] = code;
-    }
-
+    /**
+     * Scan line offsets in the document
+     * TODO: Scan in ranges & if lexing, this could be handled by the lexer itself anyway to reduce passes (maybe)
+     */
     scanLines() {
         // For now we scan the whole document
         // Later only scan by ranges to avoid iterating the whole document if not needed
@@ -1482,8 +1487,10 @@ class CodeEditor extends AcceleratedTextGridRenderer {
             }
 
             const lineStart = state.lines[lineIndex - 1] || 0;
-            const lineEnd = state.lines[lineIndex] || state.data.length;
-            const lineText = state.data.subarray(lineStart, lineEnd);
+            const lineLength = (state.lines[lineIndex] || state.data.length) - lineStart;
+            const textColor = this.theme.default;
+            const tokenColors = this.theme.tokens;
+            const data = state.data;
 
             /**
              * @type {Array<[type, start, end]>}
@@ -1491,28 +1498,25 @@ class CodeEditor extends AcceleratedTextGridRenderer {
             const lineTokens = this.tokens[lineIndex];
             let col = 0;
 
+            // Draw highlight tokens if any
             if (lineTokens && lineTokens.length > 0) {
                 for (const token of lineTokens) {
-                    // console.log("Token", token, "from", tokenStartCol, "to", token[2] - lineStart);
-                    for (; col < this.cols && col < (token[2] - lineStart); col++) {
-                        const charCode = lineText[col] || 32;
-                        let color = this.theme.tokens[token[0]] || this.theme.default;
+                    for (; col < this.cols && col < lineLength && col < (token[2] - lineStart); col++) {
+                        const charCode = data[lineStart + col] || 32;
+                        let color = tokenColors[token[0]] || textColor;
                         this._updateVertex(col, row, charCode, color[0], color[1], color[2], color[3]);
                     }
                 }
             }
 
-            this.#renderRemainder(col, row, lineText);
+            // Draw remaining text & fill rest of line with spaces
+            for (; col < this.cols; col++) {
+                const char = col < lineLength ? data[lineStart + col] : 32;
+                this._updateVertex(col, row, char, textColor[0], textColor[1], textColor[2], textColor[3]);
+            }
         }
 
         this.render();
-    }
-
-    #renderRemainder(col, row, lineText, limit = this.cols) {
-        const color = this.theme.default;
-        for (; col < limit; col++) {
-            this._updateVertex(col, row, lineText[col] || 0, color[0], color[1], color[2], color[3]);
-        }
     }
 
     // TODO: Virtual scrolling without re-rendering the screen

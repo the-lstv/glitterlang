@@ -36,6 +36,11 @@ function __s2u8(str) {
     return textEncoder.encode(str);
 }
 
+/**
+ * Fast tiny hash for Uint8Arrays.
+ * @param {*} uint8 Input array
+ * @returns {number} The hash number
+ */
 function smallu8hash(uint8) {
     let hash = 0;
     for (let i = 0; i < uint8.length; i++) {
@@ -47,6 +52,12 @@ function smallu8hash(uint8) {
     return hash >>> 0;
 }
 
+/**
+ * Compares if two Uint8Arrays are equal
+ * @param {*} a First array
+ * @param {*} b Second array
+ * @returns {boolean}
+ */
 function equalU8(a, b) {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
@@ -58,6 +69,11 @@ function equalU8(a, b) {
 // Strings suck
 // Sadly we need this stupid helper to get lookups for u8
 // In the native version this can be done with a regular set, so we don't need to waste so much work
+
+/**
+ * StringView-compatible set.
+ * We can do set.add("string"), then call "has" with a stringview/uint8array
+ */
 class svSet extends Set {
     constructor(iterable) {
         super(iterable);
@@ -65,6 +81,7 @@ class svSet extends Set {
         this.u8H = new Set();
         this.u8M = new Map();
         this.max = 0;
+        this.min = 0;
 
         if(iterable) {
             for(const item of iterable) {
@@ -85,11 +102,12 @@ class svSet extends Set {
         this.u8H.add(h);
         this.u8M.set(h, u8);
         this.max = Math.max(this.max, value.length);
+        this.min = Math.min(this.min, value.length);
     }
 
     has(value) {
         if(value instanceof Uint8Array) {
-            if(value.length === 0 || value.length > this.max) {
+            if(value.length === 0 || value.length < this.min || value.length > this.max) {
                 return false;
             }
 
@@ -105,10 +123,14 @@ class svSet extends Set {
 
             return false;
         }
+
         return super.has(value);
     }
 }
 
+/**
+ * StringView-compatible map.
+ */
 class svMap extends Map {
     constructor(iterable) {
         super(iterable);
@@ -485,10 +507,8 @@ const lang = {
     },
 
     BRACKETS: {
-        OPENING: new Set([40, 91, 123, 60]),
-        CLOSING: new Set([41, 93, 125, 62]),
-
-        // Methods may be faster than a set for small values
+        // An if chain may be faster than a set for a few small numbers.
+        // https://jsbm.dev/5bGwFQcnY3iJQ
         isOpening(char) {
             return char === 40 || char === 91 || char === 123 || char === 60; // ( [ { <
         },
