@@ -1,3 +1,20 @@
+/*
+TODO:
+- Antialiasing
+- Font ligatures mapping & rendering
+- Line numbers
+- Cursor
+- Selection
+- Input handling
+- Fix grid scaling & positions & virtual scroll bounds
+- Virtual scrolling
+- Performance optimizations (after the last change the rendering performance tanked somehow, though I am not sure how is that even possible as rendering itself did not change at all)
+- Refactor
+- Fix & enhance tokenizing & highlighting
+- Token decorations & links (for intellisense)
+- Decorations
+*/
+
 const msdfFragment = `#version 300 es
 precision mediump float;
 in vec2 v_texCoord;
@@ -168,6 +185,8 @@ class Font {
 /**
  * A high-performance text grid renderer using WebGL and MSDF fonts.
  * Can entirely avoid JS string operations and use direct buffers/charcodes, and offers virtual scrolling to avoid re-rendering.
+ * 
+ * TODO: There is currently quite a lot of bugs and it serves more as a prototype. I will later need to refactor
  */
 class AcceleratedTextGridRenderer {
     /**
@@ -356,7 +375,7 @@ class AcceleratedTextGridRenderer {
     setFontSize(size) {
         this.fontSize = size;
         if (this.font) {
-            this.scale = size / this.font.info.size;
+            this.scale = size / this.font.atlas.size;
             this.cellWidth = this.font.baseCellWidth * this.scale;
             this.cellHeight = this.font.baseCellHeight * this.scale;
             this._rebuildGlyphScale();
@@ -658,12 +677,15 @@ class AcceleratedTextGridRenderer {
         this.gridDirty = false;
     }
 
+    /**
+     * Important TODO: Somehow, with the new font map changes (to Chlumsky/msdf-atlas-gen from msdf-bmfont-xml), rendering got really slow (_updateVertex now takes up to 4x the time!!) AND worse quality (scaling issues, bad quality when up close).
+     * It has to be refactored at some point.
+     */
     async loadFont(src) {
-        const name = src.split('/').pop().split('.').shift();
-        const imgUrl = `/assets/fonts/${name}.png`;
+        const imgUrl = src + "/atlas.png";
 
         const [fontData, image] = await Promise.all([
-            fetch(src).then(r => r.json()),
+            fetch(src + "/font.json").then(r => r.json()),
             new Promise((resolve, reject) => {
                 const img = new Image();
                 img.onload = () => resolve(img);
@@ -684,59 +706,92 @@ class AcceleratedTextGridRenderer {
         // Number of floats per character in the cmap
         const MAP_SLOTS = 15;
 
-        const lowestCharCode = Math.min(...fontData.chars.map(c => c.char.charCodeAt(0)));
-        const highestCharCode = Math.max(...fontData.chars.map(c => c.char.charCodeAt(0)));
+        const baseFontSize = fontData.atlas.size || 24;
+        const metrics = fontData.metrics || {};
+        if (metrics.lineHeight) {
+            this.lineHeight = metrics.lineHeight;
+        }
+
+        const lowestCharCode = Math.min(...fontData.glyphs.map(c => c.code || Infinity));
+        const highestCharCode = Math.max(...fontData.glyphs.map(c => c.code || 0));
 
         // Pack the font data into a single Float32Array for fast access
         const map = new Float32Array((highestCharCode - lowestCharCode + 1) * MAP_SLOTS); // +1 for missing glyph
 
+        const hasBottomOrigin = fontData.atlas?.yOrigin === "bottom";
+        const baselinePx = (metrics.ascender || 0) * baseFontSize;
+
         // Precompute as much as possible
-        for (let i = 0; i < fontData.chars.length; i++) {
-            const charData = fontData.chars[i];
-            const code = charData.char.charCodeAt(0);
+        for (let i = 0; i < fontData.glyphs.length; i++) {
+            const charData = fontData.glyphs[i];
+            const code = charData.code;
+
+            if (code === undefined || code === null) continue;
 
             /* x, y, w, h, xoffset, yoffset, xadvance, u0, v0, u1, v1, xOff, yOff, gw, gh */
 
-            // Font atlas data
-            map[(code - lowestCharCode) * MAP_SLOTS    ] = charData.x;
-            map[(code - lowestCharCode) * MAP_SLOTS + 1] = charData.y;
-            map[(code - lowestCharCode) * MAP_SLOTS + 2] = charData.width;
-            map[(code - lowestCharCode) * MAP_SLOTS + 3] = charData.height;
-            map[(code - lowestCharCode) * MAP_SLOTS + 4] = charData.xoffset;
-            map[(code - lowestCharCode) * MAP_SLOTS + 5] = charData.yoffset;
-            map[(code - lowestCharCode) * MAP_SLOTS + 6] = charData.xadvance;
+            const plane = charData.planeBounds || null;
+            const atlas = charData.atlasBounds || null;
+
+            const leftPx = plane ? plane.left * baseFontSize : 0;
+            const rightPx = plane ? plane.right * baseFontSize : 0;
+            const topPx = plane ? plane.top * baseFontSize : 0;
+            const bottomPx = plane ? plane.bottom * baseFontSize : 0;
+
+            const gw = rightPx - leftPx;
+            const gh = topPx - bottomPx;
+
+            const atlasLeft = atlas ? atlas.left : 0;
+            const atlasRight = atlas ? atlas.right : 0;
+            const atlasTop = atlas ? atlas.top : 0;
+            const atlasBottom = atlas ? atlas.bottom : 0;
+
+            const u0 = atlasLeft / image.width;
+            const u1 = atlasRight / image.width;
+            const v0 = hasBottomOrigin
+                ? (1 - (atlasTop / image.height))
+                : (atlasTop / image.height);
+            const v1 = hasBottomOrigin
+                ? (1 - (atlasBottom / image.height))
+                : (atlasBottom / image.height);
+
+            const xOff = leftPx;
+            const yOff = baselinePx - topPx;
+
+            // Font atlas data (kept for compatibility with rebuild)
+            map[(code - lowestCharCode) * MAP_SLOTS    ] = atlasLeft;
+            map[(code - lowestCharCode) * MAP_SLOTS + 1] = atlasBottom;
+            map[(code - lowestCharCode) * MAP_SLOTS + 2] = gw;
+            map[(code - lowestCharCode) * MAP_SLOTS + 3] = gh;
+            map[(code - lowestCharCode) * MAP_SLOTS + 4] = xOff;
+            map[(code - lowestCharCode) * MAP_SLOTS + 5] = yOff;
+            map[(code - lowestCharCode) * MAP_SLOTS + 6] = charData.advance || 0;
 
             // UV coordinates
-            map[(code - lowestCharCode) * MAP_SLOTS + 7] = charData.x / image.width;
-            map[(code - lowestCharCode) * MAP_SLOTS + 8] = charData.y / image.height;
-            map[(code - lowestCharCode) * MAP_SLOTS + 9] = (charData.x + charData.width) / image.width;
-            map[(code - lowestCharCode) * MAP_SLOTS + 10] = (charData.y + charData.height) / image.height;
+            map[(code - lowestCharCode) * MAP_SLOTS + 7]  = u0;
+            map[(code - lowestCharCode) * MAP_SLOTS + 8]  = v0;
+            map[(code - lowestCharCode) * MAP_SLOTS + 9]  = u1;
+            map[(code - lowestCharCode) * MAP_SLOTS + 10] = v1;
 
             // Scale based
-            map[(code - lowestCharCode) * MAP_SLOTS + 11] = (charData.xoffset || 0) * this.scale;
-            map[(code - lowestCharCode) * MAP_SLOTS + 12] = (charData.yoffset || 0) * this.scale;
-            map[(code - lowestCharCode) * MAP_SLOTS + 13] = charData.width * this.scale;
-            map[(code - lowestCharCode) * MAP_SLOTS + 14] = charData.height * this.scale;
+            map[(code - lowestCharCode) * MAP_SLOTS + 11] = xOff * this.scale;
+            map[(code - lowestCharCode) * MAP_SLOTS + 12] = yOff * this.scale;
+            map[(code - lowestCharCode) * MAP_SLOTS + 13] = gw * this.scale;
+            map[(code - lowestCharCode) * MAP_SLOTS + 14] = gh * this.scale;
         }
 
         // Font metrics
-        const spaceCharData = fontData.chars.find(c => c.id === 32) || fontData.chars.find(c => c.id === 77) || fontData.chars[0];
-        const baseCellWidth = spaceCharData.xadvance || 20;
-        const baseCellHeight = fontData.info.size || 24;
+        const spaceCharData = fontData.glyphs.find(c => c.code === 32) || fontData.glyphs[0];
+        const baseCellWidth = (spaceCharData?.advance || 0.6) * baseFontSize;
+        const baseCellHeight = baseFontSize;
 
         this.cmap = map;
-        this.font = {
-            name,
-            atlasWidth: image.width,
-            atlasHeight: image.height,
-            // data: fontData, // This can be likely discarded
-            info: fontData.info,
-            baseCellWidth,
-            baseCellHeight,
-            _missingGlyphIndex: (highestCharCode - lowestCharCode + 1) * MAP_SLOTS,
-            _lowestCharCode: lowestCharCode,
-            _scale: this.scale
-        };
+
+        this.font = fontData;
+        this.font.baseCellWidth = baseCellWidth;
+        this.font.baseCellHeight = baseCellHeight;
+        this.font._missingGlyphIndex = (highestCharCode - lowestCharCode + 1) * MAP_SLOTS;
+        this.font._lowestCharCode = lowestCharCode;
     }
 
     _rebuildGlyphScale() {
@@ -838,7 +893,7 @@ class AcceleratedTextGridRenderer {
 
             gl.bindVertexArray(null);
 
-            await this.loadFont(options.fontSrc || '/assets/fonts/JBMono.json');
+            await this.loadFont(options.fontSrc || ('/assets/fonts/' + (options.fontName || 'JetBrainsMono')));
 
             this.setFontSize(this.fontSize);
             this.setupGrid(this.canvas.width / this.cellWidth, this.canvas.height / this.cellHeight);
@@ -990,19 +1045,6 @@ class AcceleratedTextGridRenderer {
         this.destroyed = true;
     }
 }
-
-/*
-// Later in glitter
-struct Piece : Array {
-    u32 offset;
-    u32 length;
-    bit isAppend;
-}
-
-Piece(0, 0, 0); // [0, 0, 0]
-Piece{ offset: 0, length: 0 } // [0, 0, 0]
-*/
-
 
 const EMPTY_U8 = new Uint8Array(0);
 

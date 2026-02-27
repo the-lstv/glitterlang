@@ -2,17 +2,87 @@ const fs = require("fs");
 const pngjs = require("pngjs");
 const path = require("path");
 const minimist = require("minimist");
+const spawn = require("child_process").spawn;
 const args = minimist(process.argv.slice(2));
-console.log(args);
-process.exit(0);
 
-/**
- * The point of this script is to obtain the glyph information for ligatures to support coding ligatures.
- * Sadly there is no cleaner way to do that :(
- * 
- * The shaper library is not perfect and returns quite inefficient maps
- */
-async function main(params) {
+/*
+
+Options:
+--fontPath: Path to the input font file (default: ../JetBrainsMono[wght].ttf)
+--name: Name of the output font (default: derived from input file name)
+--outputDir or -o: Directory to save the output atlas and JSON (default: ../fonts/{name})
+--include or -i: Comma-separated list of character sets to include (e.g. "base,diacritics,extras" or "all")
+--exclude or -e: Comma-separated list of character sets to exclude (e.g. "diacritics")
+--charset: Custom string of characters to include in addition to the predefined sets
+--ligatures or -l: Include common programming ligatures supported by the font
+--noDefaultLigatures: Do not include the default set of programming ligatures, only those specified in --ligatures
+--downloadGenerator: Automatically download the msdf-atlas-gen binary if not found
+
+Character sets:
+- base: Basic ASCII characters and common symbols
+- diacritics: Latin characters with diacritics for European languages
+- extras: Additional symbols, currency signs, math operators, etc.
+- blockSymbols: Unicode block elements for drawing boxes and progress bars
+- boxSymbols: Unicode box-drawing characters
+- punct: Common punctuation marks and typographic symbols
+- numbers: Digits and related symbols (e.g. fractions)
+- cyrillic: Cyrillic alphabet characters
+- greek: Greek alphabet characters
+
+Example usage:
+node convert.js --fontPath ../MyFont.ttf --name MyFont --outputDir ../fonts/MyFont --include base,diacritics --ligatures "->,=>,==>" --charset "€£¥" --downloadGenerator
+
+*/
+
+async function main() {
+    if(!fs.existsSync(__dirname + "/msdf-atlas-gen")) {
+        if(args.downloadGenerator) {
+            let url, sum;
+
+            if(process.platform === "linux" && process.arch === "x64") {
+                // Trusted binary source, built straigt from the official msdf-atlas-gen repository (feel free to verify)
+                // Built from commit: c76a32319934c39e51a8c4838240d7b2362b0882 on Fedora 42, February 26 2026
+                url = "https://repo.lstv.space/binaries/msdf-atlas-gen-linux-x64";
+                sum = "360a3f9c333683ba1f50de0d4b772162b13c293a4d8526d6f6db92613551e5f0";
+            } else if(process.platform === "win32" && process.arch === "x64") {
+                // Identical to the build from github releases, just extracted from the pointless zip wrapper
+                url = "https://repo.lstv.space/binaries/msdf-atlas-gen-win-x64.exe";
+                sum = "e790f0f50bb432bfbe0115b419168d4a8ebfa9a6b78a515a198c3115c2a19bbd";
+            } else {
+                console.error("Error: Unsupported platform or architecture for msdf-atlas-gen binary. Please download and build it from https://github.com/Chlumsky/msdf-atlas-gen");
+                return;
+            }
+
+            const filePath = path.join(__dirname, "msdf-atlas-gen");
+
+            console.log("Downloading msdf-atlas-gen from", url);
+            const curl = spawn("curl", ["-L", url, "-o", filePath]);
+            curl.on("close", code => {
+                if (code === 0) {
+                    // Verify the file hash to ensure it was downloaded correctly and hasn't been tampered with
+                    const fileBuffer = fs.readFileSync(filePath);
+                    const crypto = require("crypto");
+                    const hash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+                    if (hash !== sum) {
+                        console.error(`Error: Hash mismatch for downloaded binary file! Expected ${sum}, got ${hash}. Deleting the file.\nSource: ${url}`);
+                        fs.unlinkSync(filePath);
+                        return;
+                    }
+
+                    fs.chmodSync(filePath, 0o755);
+                    console.log("msdf-atlas-gen downloaded and ready to use.");
+                    main();
+                } else {
+                    console.error("Error: Failed to download msdf-atlas-gen. You will need to download and build it from https://github.com/Chlumsky/msdf-atlas-gen, or try again later.");
+                }
+            });
+
+            return;
+        } else {
+            console.error("Error: msdf-atlas-gen binary not found. Re-run with --downloadGenerator to download it (requires internet access).");
+            return;
+        }
+    }
 
     // --- Definitions
 
@@ -26,108 +96,153 @@ async function main(params) {
 
     // The charset we support
     const sets = {
-        base:            " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüůýþÿ~",
-        diacritics:      "ÁĂẮẶẰẲẴǍÂẤẬẦẨẪÄẠÀẢĀĄÅÃÆǼĆČÇĈĊÐĎĐÉĔĚÊẾỆỀỂỄËĖẸÈẺĒĘƐẼǴĞǦĜĢĠĦĤÍĬÎÏİỊÌỈĪĮĨĴĶĹĽĻĿŁŃŇŅŊÑÓŎÔỐỘỒỔỖÖỌÒỎƠỚỢỜỞỠŐŌǪØǾÕŒÞŔŘŖŚŠŞŜȘẞƏŦŤŢȚÚŬÛÜỤÙỦƯỨỰỪỬỮŰŪŲŮŨẂŴẄẀÝŶŸỴỲỶȲỸŹŽŻáăâäàāąåãæǽćčçĉċðďđéĕěêëėèēęəğǧĝġħĥiıíĭîïìīįĩjȷĵĸlĺľŀłmnńŉňŋñóŏôöòơőōøǿõœþŕřsśšşŝßſŧťúŭûüùưűūģķļņŗţǫǵșțạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỵỷỹųůũẃŵẅẁýŷÿỳzźžż",
-        extras:          "₿¢¤$₫€ƒ₴₽£₮¥≃∵≬⋈∙≔∁≅∐⎪⋎⋄∣∕∤∸⋐⋱∈∊⋮∎⁼≡≍∹∃∇≳∾⥊⟜⎩⎨⎧⋉⎢⎣⎡≲⋯∓≫≪⊸⊎⨀⨅⨆⊼⋂⋃≇⊈⊉⊽⊴≉∌∉≭≯≱≢≮≰⋢⊄⊅+−×÷=≠><≥≤±≈¬~^∞∅∧∨∩∪∫∆∏∑√∂µ∥⎜⎝⎛⎟⎠⎞%‰﹢⁺≺≼∷≟∶⊆⊇⤖⎭⎬⎫⋊⎥⎦⎤⊢≗∘∼⊓⊔⊡⊟⊞⊠⊏⊑⊐⊒⋆≣⊂≻∋⅀⊃⊤⊣∄∴≋∀⋰⊥⊻⊛⊝⊜⊘⊖⊗⊙⊕↑↗→↘↓↙←↖↔↕↝↭↞↠↢↣↥↦↧⇥↩↪↾⇉⇑⇒⇓⇐⇔⇛⇧⇨⌄⌤➔➜➝➞⟵⟶⟷●○◯◔◕◶◌◉◎◦◆◇◈◊■□▪▫◧◨◩◪◫▲▶▼◀△▷▽◁►◄▻◅▴▸▾◂▵▹▿◃⌶⍺⍶⍀⍉⍥⌾⍟⌽⍜⍪⍢⍒⍋⍙⍫⍚⍱⍦⍎⍊⍖⍷⍩⍳⍸⍤⍛⍧⍅⍵⍹⎕⍂⌼⍠⍔⍍⌺⌹⍗⍌⌸⍄⌻⍇⍃⍯⍰⍈⍁⍐⍓⍞⍘⍴⍆⍮⌿⌷⍣⍭⍨⍲⍝⍡⍕⍑⍏⍬⚇⚠⚡✓✕✗✶@&¶§©®™°′″|¦†ℓ‡№℮␣⎋⌃⌞⌟⌝⌜⎊⎉⌂⇪⌫⌦⌨⌥⇟⇞⌘⏎⏻⏼⭘⏽⏾⌅�˳˷",
-        blockSymbols:    "▁▂▃▄▅▆▇█▀▔▏▎▍▌▋▊▉▐▕▖▗▘▙▚▛▜▝▞▟░▒▓",
-        boxSymbols:      "┌└┐┘┼┬┴├┤─│╡╢╖╕╣║╗╝╜╛╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪━┃┄┅┆┇┈┉┊┋┍┎┏┑┒┓┕┖┗┙┚┛┝┞┟┠┡┢┣┥┦┧┨┩┪┫┭┮┯┰┱┲┳┵┶┷┸┹┺┻┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋╌╍╎╏╭╮╯╰╱╲╳╴╵╶╷╸╹╺╻╼╽╾╿",
-        punct:           ".,:;…!¡?¿·•*⁅⁆#․‾/\\‿(){}[]❰❮❱❯⌈⌊⌉⌋⦇⦈-­–—‐_‚„“”‘’«»‹›‴\"'⟨⟪⟦⟩⟫⟧·;",
-        numbers:         "0123456789₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹½¼¾↋↊૪",
-        cyrillicCharset: "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя",
-        greekCharset:    "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"
+        base:         " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ~",
+        diacritics:   "ÁĂẮẶẰẲẴǍÂẤẬẦẨẪÄẠÀẢĀĄÅÃÆǼĆČÇĈĊÐĎĐÉĔĚÊẾỆỀỂỄËĖẸÈẺĒĘƐẼǴĞǦĜĢĠĦĤÍĬÎÏİỊÌỈĪĮĨĴĶĹĽĻĿŁŃŇŅŊÑÓŎÔỐỘỒỔỖÖỌÒỎƠỚỢỜỞỠŐŌǪØǾÕŒÞŔŘŖŚŠŞŜȘẞƏŦŤŢȚÚŬÛÜỤÙỦƯỨỰỪỬỮŰŪŲŮŨẂŴẄẀÝŶŸỴỲỶȲỸŹŽŻáăâäàāąåãæǽćčçĉċðďđéĕěêëėèēęəğǧĝġħĥiıíĭîïìīįĩjȷĵĸlĺľŀłmnńŉňŋñóŏôöòơőōøǿõœþŕřsśšşŝßſŧťúŭûüùưűūģķļņŗţǫǵșțạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỵỷỹųůũẃŵẅẁýŷÿỳzźžż",
+        extras:       "₿¢¤$₫€ƒ₴₽£₮¥≃∵≬⋈∙≔∁≅∐⎪⋎⋄∣∕∤∸⋐⋱∈∊⋮∎⁼≡≍∹∃∇≳∾⥊⟜⎩⎨⎧⋉⎢⎣⎡≲⋯∓≫≪⊸⊎⨀⨅⨆⊼⋂⋃≇⊈⊉⊽⊴≉∌∉≭≯≱≢≮≰⋢⊄⊅+−×÷=≠><≥≤±≈¬~^∞∅∧∨∩∪∫∆∏∑√∂µ∥⎜⎝⎛⎟⎠⎞%‰﹢⁺≺≼∷≟∶⊆⊇⤖⎭⎬⎫⋊⎥⎦⎤⊢≗∘∼⊓⊔⊡⊟⊞⊠⊏⊑⊐⊒⋆≣⊂≻∋⅀⊃⊤⊣∄∴≋∀⋰⊥⊻⊛⊝⊜⊘⊖⊗⊙⊕↑↗→↘↓↙←↖↔↕↝↭↞↠↢↣↥↦↧⇥↩↪↾⇉⇑⇒⇓⇐⇔⇛⇧⇨⌄⌤➔➜➝➞⟵⟶⟷●○◯◔◕◶◌◉◎◦◆◇◈◊■□▪▫◧◨◩◪◫▲▶▼◀△▷▽◁►◄▻◅▴▸▾◂▵▹▿◃⌶⍺⍶⍀⍉⍥⌾⍟⌽⍜⍪⍢⍒⍋⍙⍫⍚⍱⍦⍎⍊⍖⍷⍩⍳⍸⍤⍛⍧⍅⍵⍹⎕⍂⌼⍠⍔⍍⌺⌹⍗⍌⌸⍄⌻⍇⍃⍯⍰⍈⍁⍐⍓⍞⍘⍴⍆⍮⌿⌷⍣⍭⍨⍲⍝⍡⍕⍑⍏⍬⚇⚠⚡✓✕✗✶@&¶§©®™°′″|¦†ℓ‡№℮␣⎋⌃⌞⌟⌝⌜⎊⎉⌂⇪⌫⌦⌨⌥⇟⇞⌘⏎⏻⏼⭘⏽⏾⌅�˳˷",
+        blockSymbols: "▁▂▃▄▅▆▇█▀▔▏▎▍▌▋▊▉▐▕▖▗▘▙▚▛▜▝▞▟░▒▓",
+        boxSymbols:   "┌└┐┘┼┬┴├┤─│╡╢╖╕╣║╗╝╜╛╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪━┃┄┅┆┇┈┉┊┋┍┎┏┑┒┓┕┖┗┙┚┛┝┞┟┠┡┢┣┥┦┧┨┩┪┫┭┮┯┰┱┲┳┵┶┷┸┹┺┻┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋╌╍╎╏╭╮╯╰╱╲╳╴╵╶╷╸╹╺╻╼╽╾╿",
+        punct:        ".,:;…!¡?¿·•*⁅⁆#․‾/\\‿(){}[]❰❮❱❯⌈⌊⌉⌋⦇⦈-­–—‐_‚„“”‘’«»‹›‴\"'⟨⟪⟦⟩⟫⟧·;",
+        numbers:      "0123456789₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹½¼¾↋↊૪",
+        cyrillic:     "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+        greek:        "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"
     }
 
-    // These are ligatures supported by JetBrains Mono
-    let ligatures = ["--","---","==","===","!=","!==","=!=","=:=","=/=","<=",">=","&&","&&&","&=","++","+++","***",";;","!!","??","???","?:","?.","?=","<:",":<",":>",">:","<:<","<>","<<<",">>>","<<",">>","||","-|","_|_","|-","||-","|=","||=","##","###","####","#{","#[","]#","#(","#?","#_","#_(","#:","#!","#=","^=","<$>","<$","$>","<+>","<+","+>","<*>","<*","*>","</","</>","/>","\x3C!--","<#--","-->","->","->>","<<-","<-","<=<","=<<","<<=","<==","<=>","<==>","==>","=>","=>>",">=>",">>=",">>-",">-","-<","-<<",">->","<-<","<-|","<=|","|=>","|->","<->","<<~","<~~","<~","<~>","~~","~~>","~>","~-","-~","~@","[||]","|]","[|","|}","{|","[<",">]","|>","<|","||>","<||","|||>","<|||","<|>","...","..",".=","..<",".?","::",":::",":=","::=",":?",":?>","//","///","/*","*/","/=","//=","/==","@_","__","???",";;;"];
+    const ligatureTable = {};
+
+    // These are ligatures supported by the JetBrains Mono font and should cover most common coding ligatures. You can add more if your font supports them.
+    let ligatures = [...args.noDefaultLigatures? [] : ["--","---","==","===","!=","!==","=!=","=:=","=/=","<=",">=","&&","&&&","&=","++","+++","***",";;","!!","??","???","?:","?.","?=","<:",":<",":>",">:","<:<","<>","<<<",">>>","<<",">>","||","-|","_|_","|-","||-","|=","||=","##","###","####","#{","#[","]#","#(","#?","#_","#_(","#:","#!","#=","^=","<$>","<$","$>","<+>","<+","+>","<*>","<*","*>","</","</>","/>","\x3C!--","<#--","-->","->","->>","<<-","<-","<=<","=<<","<<=","<==","<=>","<==>","==>","=>","=>>",">=>",">>=",">>-",">-","-<","-<<",">->","<-<","<-|","<=|","|=>","|->","<->","<<~","<~~","<~","<~>","~~","~~>","~>","~-","-~","~@","[||]","|]","[|","|}","{|","[<",">]","|>","<|","||>","<||","|||>","<|||","<|>","...","..",".=","..<",".?","::",":::",":=","::=",":?",":?>","//","///","/*","*/","/=","//=","/==","@_","__","???",";;;"], ...typeof args.ligatures === "string"? args.ligatures.split(",") : []];
 
     // Extensions
-    const default = "base";
-    const include = args.include;
-    const exclude = args.exclude;
-    const charset = Object.keys(sets).fiter( /** ffs moving again */
+    const all = Object.keys(sets);
+    const include = ["base", ...(args.include === "all" || args.include === "*" || args.A) ? all : args.include ? args.include.split(",") : []];
+    const exclude = args.exclude ? args.exclude.split(",") : [];
 
+    const charset = (args.charset? args.charset : "") + Object.keys(sets).filter(set => {
+        if (include && !include.includes(set)) {
+            return false;
+        }
+        if (exclude && exclude.includes(set)) {
+            return false;
+        }
+        return true;
+    }).reduce((acc, set) => acc + sets[set], "");
 
     // ---
 
-
     // text-shaper does not work with ligatures
     const HarfBuzz = await require("harfbuzzjs");
-    const { Font, shape, feature, UnicodeBuffer, buildMsdfAtlas, msdfAtlasToRGBA } = await import("text-shaper");
+    const { Font } = await import("text-shaper");
 
     const start = performance.now();
 
     const font = Font.load(fs.readFileSync(fontPath).buffer);
-    const glyphIds = new Set();
+    const glyphs = new Map();
+    
+    if ((args.ligatures || args.l) && ligatures.length > 0) {
+        const features = ["liga", "calt", "clig", "dlig"].join(",");
 
-    if (!args.noLigatures && ligatures.length > 0) {
         const blob = HarfBuzz.createBlob(fs.readFileSync(fontPath).buffer); // ArrayBuffer
         const face = HarfBuzz.createFace(blob);
         const font = HarfBuzz.createFont(face);
-        const buffer = HarfBuzz.createBuffer();
-        buffer.addText(ligatures.join(""));
-        buffer.guessSegmentProperties();
-        HarfBuzz.shape(font, buffer, ["liga", "calt", "clig", "dlig"].join(","));
-        const result = buffer.json(font);
+        // const buffer = HarfBuzz.createBuffer();
+        // buffer.addText(ligatures.join(""));
+        // buffer.guessSegmentProperties();
+        // HarfBuzz.shape(font, buffer, features);
+        // const result = buffer.json(font);
         // console.log(result);
 
-        for (let info of result) {
-            glyphIds.add(info.g);
+        // for (let info of result) {
+        //     glyphs.set(info.g, {});
+        // }
+        const addLigature = (ligature) => {
+            const buffer = HarfBuzz.createBuffer();
+            buffer.addText(ligature);
+            buffer.guessSegmentProperties();
+            HarfBuzz.shape(font, buffer, features);
+
+            const result = buffer.json(font);
+
+            for (let info of result) {
+                ligatureTable[ligature] = info.g;
+                // glyphs.set(info.g, { char: ligature, code: null });
+            }
+
+            if(result.length !== 1) {
+                console.warn(`Ligature "${ligature}" did not shape to a single glyph`, result);
+            }
+        }
+
+        for(const ligature of ligatures) {
+            addLigature(ligature);
         }
     }
+    
+    glyphs.set(1742, { char: null, code: null });
 
     // Add character glyphs
     for (let i = 0; i < charset.length; i++) {
         const char = charset[i];
+
         const codePoint = char.codePointAt(0);
+        if(codePoint !== char.charCodeAt(0)) {
+            console.warn("Character", char, "is outside of the 16-bit range");
+        }
+
         const glyphId = font.glyphId(codePoint);
-        glyphIds.add(glyphId);
+        glyphs.set(glyphId, { char, code: codePoint });
     }
 
-    // Build atlas
-    const atl = buildMsdfAtlas(font, [...glyphIds.values()], {
-        fontSize: 32,
-        spread: 4,
-        padding: 0,
-        maxWidth: 1024,
+
+    // --- Generate the atlas
+
+    const atlasGenPath = path.join(__dirname, "msdf-atlas-gen");
+    const atlasGenArgs = [
+        "--font", fontPath,
+        "--size", "32",
+        "--glyphs", [...glyphs.keys()].join(","),
+        "--format", "png",
+        "--imageout", path.join(outputDir, "atlas.png"),
+        "--json", path.join(outputDir, "font.json"),
+    ];
+
+    const atlasGen = spawn(atlasGenPath, atlasGenArgs);
+
+    atlasGen.stdout.on("data", data => {
+        console.log(`[msdf-atlas-gen] ${data}`);
     });
 
-    // Save atlas as PNG
-    const rgba = msdfAtlasToRGBA(atl);
-    storeAtlas(atl, rgba, outputDir + "/atlas.png");
+    atlasGen.stderr.on("data", data => {
+        console.error(`[msdf-atlas-gen] ${data}`);
+    });
 
-    // Save font info as JSON
-    const fontInfo = {
-        glyphs: [...glyphIds.values()],
-        atlas: {
-            width: atl.bitmap.width,
-            rows: atl.bitmap.rows,
-        },
-    };
+    await new Promise((resolve, reject) => {
+        atlasGen.on("close", code => {
+            if (code === 0) {
+                resolve();
+            } else {
+                reject(new Error(`msdf-atlas-gen exited with code ${code}`));
+            }
+        });
+    });
 
-    fs.writeFileSync(outputDir + "/font.json", JSON.stringify(fontInfo));
+    const atlasData = JSON.parse(fs.readFileSync(path.join(outputDir, "font.json"), "utf-8"));
+
+    // We now reformat the atlas data & store ligature information
+    for(const char of atlasData.glyphs) {
+        const glyphInfo = glyphs.get(char.index);
+        if(glyphInfo) {
+            // char.char = glyphInfo.char;
+            char.code = glyphInfo.code;
+        }
+    }
+
+    // Then save
+    fs.writeFileSync(path.join(outputDir, "font.json"), JSON.stringify(atlasData));
 
     const end = performance.now();
-    console.log(`Converted ${glyphIds.size} glyphs in ${(end - start).toFixed(2)} ms. Saved as ${outputDir}/atlas.png and ${outputDir}/font.json`);
-}
-
-function storeAtlas(atlas, rgba, path) {
-    const { width, rows } = atlas.bitmap;
-
-    // Create a PNG with colorType 6 = RGBA
-    const png = new pngjs.PNG({
-        width,
-        height: rows,
-        colorType: 6, // RGBA
-    });
-
-    if (rgba.length !== width * rows * 4) {
-        throw new Error(`RGBA buffer length mismatch: expected ${width * rows * 4}, got ${rgba.length}`);
-    }
-
-    png.data.set(rgba);
-
-    const writeStream = fs.createWriteStream(path);
-    png.pack().pipe(writeStream);
+    console.log(`Converted ${glyphs.size} glyphs in ${(end - start).toFixed(2)} ms. Saved as ${outputDir}/atlas.png and ${outputDir}/font.json`);
 }
 
 main();
+
+// setInterval(() => {}, 1000);
