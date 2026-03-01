@@ -496,8 +496,8 @@ const EditorViewInstance = new EditorView();
 const LogsViewInstance = new LogsView();
 const ASTViewInstance = new ASTView();
 const OutputViewInstance = new OutputView();
-const TerminalViewInstance = new TerminalView();
-app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance, TerminalViewInstance);
+// const TerminalViewInstance = new TerminalView();
+app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance);//, TerminalViewInstance);
 
 app.shortcutManager.map({
     "GLOBAL_COMPILE": ["ctrl+enter", "ctrl+s"],

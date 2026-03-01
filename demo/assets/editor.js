@@ -8,7 +8,7 @@ TODO:
 - Input handling
 - Fix grid scaling & positions & virtual scroll bounds
 - Virtual scrolling
-- Performance optimizations (after the last change the rendering performance tanked somehow, though I am not sure how is that even possible as rendering itself did not change at all)
+- Performance optimizations (nvm it is fast now? what did i do???)
 - Refactor
 - Fix & enhance tokenizing & highlighting
 - Token decorations & links (for intellisense)
@@ -180,6 +180,66 @@ const asciiArtCharacterCodes = textEncoder.encode(" .-~:*=%@#");
 
 class Font {
     constructor(gl, fontJson) {}
+
+    static async load(gl, url) {
+
+    }
+}
+
+class StringView extends Uint8Array {
+    isView = true;
+
+    constructor(buf, byteOffset = 0, length) {
+        if (buf instanceof Uint8Array) {
+            super(buf.buffer, buf.byteOffset + byteOffset, length ?? (buf.length - byteOffset));
+        } else if (buf instanceof ArrayBuffer) {
+            super(buf, byteOffset, length);
+        } else {
+            throw new TypeError("Expected ArrayBuffer or Uint8Array");
+        }
+    }
+
+    charCodeAt(index) {
+        return this[index];
+    }
+
+    substring(start = 0, end = this.length) {
+        let s = start < 0 ? this.length + start : start;
+        let e = end < 0 ? this.length + end : end;
+        s = Math.max(0, s);
+        e = Math.min(this.length, e);
+        if (e < s) e = s;
+        return new StringView(this.buffer, this.byteOffset + s, e - s);
+    }
+
+    toString() {
+        return new TextDecoder().decode(this);
+    }
+
+    static fromString(str) {
+        const encoder = new TextEncoder();
+        return StringView.fromBuffer(encoder.encode(str));
+    }
+
+    /**
+     * Creates a zero-copy StringView from an ArrayBuffer or Uint8Array
+     * If the input is already a StringView, it is returned as-is
+     * @param {ArrayBuffer|Uint8Array|StringView} buffer The buffer to create a StringView from
+     * @return {StringView} The created StringView
+     */
+    static fromBuffer(buffer) {
+        if(buffer instanceof StringView) {
+            return buffer;
+        }
+
+        return new StringView(buffer instanceof ArrayBuffer ? buffer : buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    }
+}
+
+class Brush {
+    constructor(getColorFunction) {
+        this.getColor = getColorFunction;
+    }
 }
 
 /**
@@ -188,7 +248,7 @@ class Font {
  * 
  * TODO: There is currently quite a lot of bugs and it serves more as a prototype. I will later need to refactor
  */
-class AcceleratedTextGridRenderer {
+class AcceleratedTextGridRenderer extends LS.EventEmitter {
     /**
      * Creates a new accelerated text grid renderer.
      * @param {*} options 
@@ -205,6 +265,8 @@ class AcceleratedTextGridRenderer {
      * @param {string} options.welcomeMsg - Custom welcome message to display on the welcome screen.
      */
     constructor(options = {}) {
+        super();
+
         this.container = LS.Create({ class: "ls-textgrid-container" });
 
         this.frameScheduler = new LS.Util.FrameScheduler(this.#render.bind(this));
@@ -241,7 +303,7 @@ class AcceleratedTextGridRenderer {
         this.pendingResize = [false, 0, 0]; // [needsResize, width, height]
 
         // -- Welcome screen state
-        this.welcomeMsg = ["Welcome to the LS terminal!"];
+        this.welcomeMsg = "Welcome to the LS terminal!";
         this.startTime = 0;
 
         this.backgroundColor = new LS.Color(15, 14, 16);
@@ -251,6 +313,9 @@ class AcceleratedTextGridRenderer {
             this.init(options);
         }
     }
+
+    static Font = Font;
+    static Brush = Brush;
 
     setOptions(newOptions) {
         if (newOptions.backgroundColor) {
@@ -265,7 +330,7 @@ class AcceleratedTextGridRenderer {
         }
 
         if (newOptions.welcomeMsg) {
-            this.welcomeMsg = newOptions.welcomeMsg.split('\n');
+            this.welcomeMsg = newOptions.welcomeMsg;
         }
 
         if (newOptions.limitFPS) {
@@ -302,76 +367,6 @@ class AcceleratedTextGridRenderer {
         this.frameScheduler.schedule();
     }
 
-    /**
-     * Default sample welcome screen with an animated background and a centered message box.
-     */
-    welcome() {
-        this.frameFunction = this.renderWelcomeFrame.bind(this);
-        this.startTime = performance.now();
-        this.frameScheduler.start();
-    }
-
-    renderWelcomeFrame() {
-        if(!this.initialized || !this.cols || !this.rows) return;
-        const t = (performance.now() - this.startTime) * 0.001;
-
-        for (let row = 0; row < this.rows; row++) {
-            for (let col = 0; col < this.cols; col++) {
-                const x = col * 0.07;
-                const y = row * 0.09;
-
-                let v = 0;
-                v += Math.sin(x * 1.0 + y * 0.4 + t * 1.3);
-                v += Math.sin(x * 0.6 - y * 0.8 + t * 0.9 + 1.7);
-                v += Math.cos(x * 0.3 + y * 1.1 + t * 0.7 + 4.2) * 0.6;
-
-                v += Math.sin(t * 0.4 + col * 0.13 + row * 0.17) * 0.25;
-
-                const value = (v + 2.2) / 4.4;
-
-                const charIdx = Math.floor(value ** 1.3 * (asciiArtCharacterCodes.length - 1)); // ^1.3 = more contrast
-                const char = asciiArtCharacterCodes[charIdx];
-
-                const brightness = value * 0.7 + 0.3;
-                this._updateVertex(col, row, char,
-                    0.6 + brightness * 0.4,
-                    0.1 + brightness * 0.6,
-                    0.5 + brightness * 0.4,
-                    0.5
-                );
-            }
-        }
-
-        const lines = this.welcomeMsg;
-
-        const boxWidth = lines.reduce((max, line) => Math.max(max, line.length), 0) + 6;
-        const boxHeight = 5 + lines.length - 1;
-        const startCol = Math.floor((this.cols - boxWidth) / 2);
-        const startRow = Math.floor((this.rows - boxHeight) / 2);
-
-        for (let r = 0; r < boxHeight; r++) {
-            for (let c = 0; c < boxWidth; c++) {
-                const col = startCol + c;
-                const row = startRow + r;
-                let char = 32; // space
-                if (r === 0 && c === 0) char = 43; // +
-                else if (r === 0 && c === boxWidth - 1) char = 43;
-                else if (r === boxHeight - 1 && c === 0) char = 43;
-                else if (r === boxHeight - 1 && c === boxWidth - 1) char = 43;
-                else if (r === 0 || r === boxHeight - 1) char = 45; // -
-                else if (c === 0 || c === boxWidth - 1) char = 124; // |
-
-                this._updateVertex(col, row, char, 0.8, 0.9, 1.0, 1.0);
-            }
-        }
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const padding = ' '.repeat(Math.max(0, Math.floor((boxWidth - 4 - line.length) / 2)));
-            this.writeText(padding + line + padding, startCol + 2, startRow + 2 + i, 0.9, 0.95, 1.0, 1.0);
-        }
-    }
-
     setFontSize(size) {
         this.fontSize = size;
         if (this.font) {
@@ -397,11 +392,12 @@ class AcceleratedTextGridRenderer {
 
         const numCells = cols * rows;
 
-        // Backing buffers to remember grid state for resizing
-        this.gridBuffer = new Uint8ClampedArray(numCells); // char code; big limitation is that only ASCII is covered
+        // Backing buffers to remember grid state for resizing & skipping updates
+        this.gridBuffer = new Uint16Array(numCells);
 
-        // Per-instance data: i_pos(2), i_size(2), i_uvRect(4), i_color(4)
-        this.vertexData = new Float32Array(numCells * 12);
+        // Per-instance data: i_pos(2), i_size(2), i_uvRect(4), i_color(1) (color is stored as 4 bytes)
+        this.vertexData = new Float32Array(numCells * 9);
+        this.vertexByteView = new Uint8Array(this.vertexData.buffer);
 
         const gl = this.gl;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
@@ -409,6 +405,19 @@ class AcceleratedTextGridRenderer {
 
         this.instanceCount = numCells;
         this.gridDirty = false;
+    }
+
+    fitGrid() {
+        // Font dimensions need to be set before calculating grid size
+
+        const cols = Math.ceil(this.canvas.width / this.cellWidth);
+        const rows = Math.ceil(this.canvas.height / (this.cellHeight * this.lineHeight));
+
+        if (this.virtualScrolling) {
+            this.setupGrid(cols + this.virtualScrollBuffer, rows + this.virtualScrollBuffer);
+        } else {
+            this.setupGrid(cols, rows);
+        }
     }
 
     clearGrid() {
@@ -436,53 +445,69 @@ class AcceleratedTextGridRenderer {
      * @param {number} col - Column of the cell to update
      * @param {number} row - Row of the cell to update
      * @param {number} charCode - Character code to set at the specified cell
-     * @param {number} r - Red color component (0-1)
-     * @param {number} g - Green color component (0-1)
-     * @param {number} b - Blue color component (0-1)
-     * @param {number} a - Alpha component (0-1)
+     * @param {number} r - Red color component (0-255)
+     * @param {number} g - Green color component (0-255)
+     * @param {number} b - Blue color component (0-255)
+     * @param {number} a - Alpha component (0-255)
      */
-    setChar(col, row, charCode, r = 1, g = 1, b = 1, a = 1) {
+    setChar(col, row, charCode, r = 255, g = 255, b = 255, a = 255) {
         if (col < 0 || col >= this.cols || row < 0 || row >= this.rows || !this.font) return;
+
+        // Clamp color values to [0, 255]
+        if(r < 0) r = 0; else if(r > 255) r = 255;
+        if(g < 0) g = 0; else if(g > 255) g = 255;
+        if(b < 0) b = 0; else if(b > 255) b = 255;
+        if(a < 0) a = 0; else if(a > 255) a = 255;
+
         this._updateVertex(col, row, charCode, r, g, b, a);
     }
 
     /**
-     * Updates the vertex data for a single cell in the grid.
+     * Updates the vertex data for a single cell in the grid. Does not clamp values or check bounds.
      * @param {number} col - Column of the cell to update
      * @param {number} row - Row of the cell to update
      * @param {number} charCode - Optional new character code for the cell. If undefined, the character will not be changed.
-     * @param {number} r - Optional new red color component (0-1). If undefined, the red component will not be changed.
-     * @param {number} g - Optional new green color component (0-1). If undefined, the green component will not be changed.
-     * @param {number} b - Optional new blue color component (0-1). If undefined, the blue component will not be changed.
-     * @param {number} a - Optional new alpha component (0-1). If undefined, the alpha component will not be changed.
+     * @param {number} r - Optional new red color component (0-255). If undefined, the red component will not be changed.
+     * @param {number} g - Optional new green color component (0-255). If undefined, the green component will not be changed.
+     * @param {number} b - Optional new blue color component (0-255). If undefined, the blue component will not be changed.
+     * @param {number} a - Optional new alpha component (0-255). If undefined, the alpha component will not be changed.
      */
     _updateVertex(col, row, charCode, r, g, b, a) {
         const cellIdx = (row * this.cols + col);
 
         // Dirty glyph (for now we only care to render if glyph changes through this function)
-        let updateChar = false;//, updateColor = false;
-
+        let updateChar = false;
         if(charCode !== undefined) {
             updateChar = this.gridBuffer[cellIdx] !== charCode;
             this.gridBuffer[cellIdx] = charCode;
+
+            if(charCode === 61 && this.gridBuffer[cellIdx - 1] === 62) {
+                // Handle => ligature as an example
+                this._updateVertex(col - 1, row, 65536, r, g, b, a); // Use a char code outside of the normal range to indicate a ligature
+                return;
+            }
         } else if(r === undefined && g === undefined && b === undefined && a === undefined) {
             return; // No updates needed
         }
 
         const v = this.vertexData;
-        const vIdx = cellIdx * 12;
-
-        this.gridDirty = true;
+        const vIdx = cellIdx * 9;
 
         // It would be more readable to use inline enums but JS doesn't have that
         // Maybe one day I'll rewrite this in Glitter 🤔
 
-        if(r !== undefined) v[vIdx + 8] = r;
-        if(g !== undefined) v[vIdx + 9] = g;
-        if(b !== undefined) v[vIdx + 10] = b;
-        if(a !== undefined) v[vIdx + 11] = a;
+        const vb = this.vertexByteView;
+        const vbIdx = vIdx * 4;
+        if(r !== undefined) vb[vbIdx + 32] = r; // i_color.r
+        if(g !== undefined) vb[vbIdx + 33] = g; // i_color.g
+        if(b !== undefined) vb[vbIdx + 34] = b; // i_color.b
+        if(a !== undefined) vb[vbIdx + 35] = a; // i_color.a
+        this.gridDirty = true;
 
         if(!updateChar) return;
+
+        // Debug updating chars
+        // if(updateChar) charCode = 9608; else charCode = 9617;
 
         const map = this.cmap;
         const x = col * this.cellWidth;
@@ -497,17 +522,17 @@ class AcceleratedTextGridRenderer {
 
         const u0 = map[glyphIdx + 7];
         const v0 = map[glyphIdx + 8];
-        const u1 = map[glyphIdx + 9];
-        const v1 = map[glyphIdx + 10];
-        const width = map[glyphIdx + 13];
-        const height = map[glyphIdx + 14];
+        // const u1 = map[glyphIdx + 9];
+        // const v1 = map[glyphIdx + 10];
+        // const width = map[glyphIdx + 13];
+        // const height = map[glyphIdx + 14];
         const x0 = x + map[glyphIdx + 11];
         const y0 = y + map[glyphIdx + 12];
 
-        const uWidth = u1 - u0;
-        const vHeight = v1 - v0;
-        const halfWidth = width * 0.5;
-        const halfHeight = height * 0.5;
+        const uWidth = map[glyphIdx + 9] - u0;
+        const vHeight = map[glyphIdx + 10] - v0;
+        const halfWidth = map[glyphIdx + 13];
+        const halfHeight = map[glyphIdx + 14];
 
         v[vIdx] = x0 + halfWidth;       // i_pos.x (center)
         v[vIdx + 1] = y0 + halfHeight;  // i_pos.y (center)
@@ -522,6 +547,7 @@ class AcceleratedTextGridRenderer {
     #render() {
         if(this.pendingResize[0]) {
             this.#resize(this.pendingResize[1], this.pendingResize[2]);
+            this.quickEmit("resize", this.canvas.width, this.canvas.height);
             this.pendingResize[0] = false;
         }
 
@@ -601,69 +627,6 @@ class AcceleratedTextGridRenderer {
         gl.bindVertexArray(null);
     }
 
-    /**
-     * Writes a string of text to the grid starting at the specified column and row. Respects newlines and wraps text that exceeds the grid width.
-     * @param {string} text
-     * @param {number} startCol 
-     * @param {number} startRow 
-     * @param {number} r 
-     * @param {number} g 
-     * @param {number} b 
-     * @param {number} a
-     */
-    writeText(text, startCol = 0, startRow = 0, r = 1, g = 1, b = 1, a = 1) {
-        let col = startCol;
-        let row = startRow;
-        for (let i = 0; i < text.length; i++) {
-            if (text.charCodeAt(i) === 10) { // \n
-                col = startCol;
-                row++;
-                continue;
-            }
-
-            this.setChar(col, row, text.charCodeAt(i), r, g, b, a);
-
-            col++;
-
-            if (col >= this.cols) {
-                col = 0;
-                row++;
-            }
-        }
-        return this;
-    }
-    /**
-     * Writes a string of text to the grid starting at the specified column and row. Respects newlines and wraps text that exceeds the grid width.
-     * @param {Uint8Array} buffer - A buffer containing UTF-8 encoded text
-     * @param {number} startCol 
-     * @param {number} startRow 
-     * @param {number} r 
-     * @param {number} g 
-     * @param {number} b 
-     * @param {number} a
-     */
-    writeTextFromBuffer(buffer, startCol = 0, startRow = 0, r = 1, g = 1, b = 1, a = 1) {
-        let col = startCol;
-        let row = startRow;
-        for (let i = 0; i < buffer.length; i++) {
-            if (buffer[i] === 10) { // \n
-                col = startCol;
-                row++;
-                continue;
-            }
-
-            this.setChar(col, row, buffer[i], r, g, b, a);
-
-            col++;
-
-            if (col >= this.cols) {
-                col = 0;
-                row++;
-            }
-        }
-        return this;
-    }
-
     updateBuffers() {
         if (!this.gridDirty) return;
         const gl = this.gl;
@@ -708,9 +671,6 @@ class AcceleratedTextGridRenderer {
 
         const baseFontSize = fontData.atlas.size || 24;
         const metrics = fontData.metrics || {};
-        if (metrics.lineHeight) {
-            this.lineHeight = metrics.lineHeight;
-        }
 
         const lowestCharCode = Math.min(...fontData.glyphs.map(c => c.code || Infinity));
         const highestCharCode = Math.max(...fontData.glyphs.map(c => c.code || 0));
@@ -776,8 +736,10 @@ class AcceleratedTextGridRenderer {
             // Scale based
             map[(code - lowestCharCode) * MAP_SLOTS + 11] = xOff * this.scale;
             map[(code - lowestCharCode) * MAP_SLOTS + 12] = yOff * this.scale;
-            map[(code - lowestCharCode) * MAP_SLOTS + 13] = gw * this.scale;
-            map[(code - lowestCharCode) * MAP_SLOTS + 14] = gh * this.scale;
+            // map[(code - lowestCharCode) * MAP_SLOTS + 13] = gw * this.scale;
+            // map[(code - lowestCharCode) * MAP_SLOTS + 14] = gh * this.scale;
+            map[(code - lowestCharCode) * MAP_SLOTS + 13] = (gw * this.scale) * 0.5;
+            map[(code - lowestCharCode) * MAP_SLOTS + 14] = (gh * this.scale) * 0.5;
         }
 
         // Font metrics
@@ -800,8 +762,8 @@ class AcceleratedTextGridRenderer {
             const glyphIdx = (charCode - this.font._lowestCharCode) * 15;
             this.cmap[glyphIdx + 11] = (this.cmap[glyphIdx + 4] || 0) * this.scale; // xOff
             this.cmap[glyphIdx + 12] = (this.cmap[glyphIdx + 5] || 0) * this.scale; // yOff
-            this.cmap[glyphIdx + 13] = this.cmap[glyphIdx + 2] * this.scale; // gw
-            this.cmap[glyphIdx + 14] = this.cmap[glyphIdx + 3] * this.scale; // gh
+            this.cmap[glyphIdx + 13] = (this.cmap[glyphIdx + 2] * this.scale) * 0.5; // gw
+            this.cmap[glyphIdx + 14] = (this.cmap[glyphIdx + 3] * this.scale) * 0.5; // gh
         }
     }
 
@@ -814,7 +776,7 @@ class AcceleratedTextGridRenderer {
         this.canvas.height = 600;
         this.container.appendChild(this.canvas);
 
-        this.gl = this.canvas.getContext('webgl2');
+        this.gl = this.canvas.getContext('webgl2', { antialias: true });
         const gl = this.gl;
 
         gl.clearColor(...this.backgroundColor.floatPixel);
@@ -824,7 +786,7 @@ class AcceleratedTextGridRenderer {
         this.canvas.addEventListener("wheel", (e) => {
             if (!this.virtualScrolling) return;
             e.preventDefault();
-            this.scroll(e.deltaX, e.deltaY);
+            this.scrollBy(e.deltaX, e.deltaY);
         });
 
         this.program = createProgram(gl, msdfVertex, msdfFragment);
@@ -874,7 +836,7 @@ class AcceleratedTextGridRenderer {
             this.vertexBuffer = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
 
-            const stride = 12 * 4;
+            const stride = (8 * 4) + (4 * 1); // 8 floats (32 bytes, position) + 4 unsigned bytes (4 bytes, color) per instance
             gl.enableVertexAttribArray(this.locations.i_pos);
             gl.vertexAttribPointer(this.locations.i_pos, 2, gl.FLOAT, false, stride, 0);
             gl.vertexAttribDivisor(this.locations.i_pos, 1);
@@ -888,15 +850,16 @@ class AcceleratedTextGridRenderer {
             gl.vertexAttribDivisor(this.locations.i_uvRect, 1);
 
             gl.enableVertexAttribArray(this.locations.i_color);
-            gl.vertexAttribPointer(this.locations.i_color, 4, gl.FLOAT, false, stride, 32);
+            gl.vertexAttribPointer(this.locations.i_color, 4, gl.UNSIGNED_BYTE, true, stride, 32);
             gl.vertexAttribDivisor(this.locations.i_color, 1);
 
             gl.bindVertexArray(null);
 
             await this.loadFont(options.fontSrc || ('/assets/fonts/' + (options.fontName || 'JetBrainsMono')));
 
+            if(!this.lineHeight) this.lineHeight = options.lineHeight || this.font.metrics.lineHeight || 1.2;
             this.setFontSize(this.fontSize);
-            this.setupGrid(this.canvas.width / this.cellWidth, this.canvas.height / this.cellHeight);
+            this.fitGrid();
         }
 
         // -- Setup rectangle program
@@ -930,13 +893,7 @@ class AcceleratedTextGridRenderer {
         if(width !== undefined) this.canvas.width = width;
         if(height !== undefined) this.canvas.height = height;
 
-        // this.setFontSize(this.fontSize); // Recalculate cell size and vertex positions
-
-        if (this.virtualScrolling) {
-            this.setupGrid(Math.ceil(this.canvas.width / this.cellWidth) + this.virtualScrollBuffer, Math.ceil(this.canvas.height / this.cellHeight) + this.virtualScrollBuffer);
-        } else {
-            this.setupGrid(Math.ceil(this.canvas.width / this.cellWidth), Math.ceil(this.canvas.height / this.cellHeight));
-        }
+        this.fitGrid();
     }
 
     resize(width, height) {
@@ -946,9 +903,11 @@ class AcceleratedTextGridRenderer {
         this.pendingResize[2] = height;
     }
 
-    scroll(deltaX, deltaY) {
+    scrollBy(deltaX, deltaY) {
         this.scrollX = Math.max(0, this.scrollX + deltaX);
         this.scrollY = Math.max(0, this.scrollY + deltaY);
+
+        this.quickEmit("scroll", this.scrollX, this.scrollY);
 
         const bufferWidth = Math.max(1, this.virtualScrollBuffer) * this.cellWidth;
         const bufferHeight = Math.max(1, this.virtualScrollBuffer) * this.cellHeight;
@@ -962,6 +921,195 @@ class AcceleratedTextGridRenderer {
             this.virtualCol = newCol;
             this.virtualRow = newRow;
             if (this.onVirtualScroll) this.onVirtualScroll(this.virtualCol, this.virtualRow);
+        }
+    }
+
+    /**
+     * A high-level method to write a string of text to the grid starting at the specified column and row as a box.
+     * Supports wrapping, alignment, and custom colors.
+     * (For custom rendering, prefer a loop instead)
+     * @param {string|StringView} text - The text to write. Can be a regular string or a StringView for zero-copy rendering.
+     * @param {object} options - Options for text rendering
+     * @param {number} options.startCol - Starting column for the text box (default: 0)
+     * @param {number} options.startRow - Starting row for the text box (default: 0)
+     * @param {number} options.align - Text alignment within the box: 0 = left, 1 = center, 2 = right (default: 0)
+     * @param {number|null} options.boxWidth - Width of the text box in characters. If null, it will be as wide as the longest line (default: null)
+     * @param {number} options.maxBoxWidth - Maximum width of the text box in characters. Only applies if boxWidth is null (default: Infinity)
+     * @param {number|null} options.boxHeight - Height of the text box in lines. If null, it will be as tall as the number of lines (default: null)
+     * @param {number} options.boxAlign - Alignment of the text box relative to the starting position: 0 = top-left, 1 = center, 2 = bottom-right (default: 0)
+     * @param {boolean} options.wrap - Whether to wrap text that exceeds the box width (default: true)
+     * @param {number} options.paddingH - Horizontal padding inside the box in characters (default: 0)
+     * @param {number} options.paddingV - Vertical padding inside the box in lines (default: 0)
+     * @param {LS.Color|Brush|[r, g, b, a]} options.color - Color or brush for the text. Can be an LS.Color, a Brush instance, or an array of RGBA values (default: [255, 255, 255, 255])
+     * @returns {[number, number, number, number]} - The position and size of the rendered text box as [col, row, width, height]
+     */
+    writeText(text, { startCol = 0, startRow = 0, align = 0, boxWidth = null, maxBoxWidth = Infinity, boxHeight = null, boxAlign = 0, wrap = true, paddingH = 0, paddingV = 0, color = [255, 255, 255, 255] }) {
+        let brush = null;
+        
+        // Resolve color or brush
+        if (color instanceof LS.Color) {
+            color = color.pixel;
+        } else if (color instanceof Brush) {
+            brush = color;
+        }
+
+        let contentWidth = boxWidth !== null ? boxWidth - paddingH * 2 : Infinity;
+        if (contentWidth <= 0) contentWidth = 1;
+
+        let lines = [];
+        let lineStartIdx = 0;
+        let currentLineLen = 0;
+
+        // Scan string and handle wrapping
+        for (let i = 0; i < text.length; i++) {
+            const charCode = text[i].charCodeAt(0);
+            if (charCode === 10) { // Newline
+                lines.push([lineStartIdx, currentLineLen]);
+                lineStartIdx = i + 1;
+                currentLineLen = 0;
+            } else {
+                if (wrap && boxWidth !== null && currentLineLen >= contentWidth) {
+                    lines.push([lineStartIdx, currentLineLen]);
+                    lineStartIdx = i;
+                    currentLineLen = 1;
+                } else {
+                    currentLineLen++;
+                }
+            }
+        }
+
+        lines.push([lineStartIdx, currentLineLen]);
+
+        const maxLineWidth = lines.length > 0 ? Math.max(...lines.map(l => l[1])) : 0;
+        boxWidth = Math.min(maxBoxWidth, boxWidth !== null ? boxWidth : maxLineWidth + paddingH * 2);
+        const actualContentWidth = boxWidth - paddingH * 2;
+        
+        const finalBoxHeight = boxHeight !== null ? boxHeight : lines.length + paddingV * 2;
+
+        if (boxAlign === 1) { // Center box
+            startCol -= Math.floor(boxWidth / 2);
+            startRow -= Math.floor(finalBoxHeight / 2);
+        } else if (boxAlign === 2) { // Right/Bottom align box
+            startCol -= boxWidth;
+            startRow -= finalBoxHeight;
+        }
+
+        // Render lines
+        for (let rowIdx = 0; rowIdx < lines.length; rowIdx++) {
+            // Respect explicitly defined boxHeight
+            if (boxHeight !== null && (rowIdx >= boxHeight - paddingV * 2)) {
+                break;
+            }
+
+            const line = lines[rowIdx];
+            const rowY = startRow + paddingV + rowIdx;
+            let lineStartCol = startCol + paddingH;
+            
+            // Align: 0 = left, 1 = center, 2 = right
+            if (align === 1) {
+                lineStartCol += Math.floor((actualContentWidth - line[1]) / 2);
+            } else if (align === 2) {
+                lineStartCol += (actualContentWidth - line[1]);
+            }
+
+            for (let c = 0; c < line[1]; c++) {
+                const i = line[0] + c;
+                const charCode = typeof text === 'string' ? text.charCodeAt(i) : (typeof text[i] === 'number' ? text[i] : text[i].charCodeAt(0));
+
+                if (brush) {
+                    brush.getColor(color, i, charCode);
+                }
+
+                this.setChar(lineStartCol + c, rowY, charCode, color[0], color[1], color[2], color[3]);
+            }
+        }
+
+        return [ startCol, startRow, boxWidth, finalBoxHeight ];
+    }
+
+    drawBox(col, row, width, height, r = 255, g = 255, b = 255, a = 255, outset = false) {
+        const tr = 9582;
+        const tl = 9581;
+        const bl = 9584;
+        const br = 9583;
+        const h = 9472;
+        const v = 9474;
+
+        if (outset) {
+            col -= 1;
+            row -= 1;
+            width += 2;
+            height += 2;
+        }
+
+        // Corners
+        this.setChar(col, row, tl, r, g, b, a);
+        this.setChar(col + width - 1, row, tr, r, g, b, a);
+        this.setChar(col, row + height - 1, bl, r, g, b, a);
+        this.setChar(col + width - 1, row + height - 1, br, r, g, b, a);
+
+        // Edges
+        for (let c = col + 1; c < col + width - 1; c++) {
+            this.setChar(c, row, h, r, g, b, a);
+            this.setChar(c, row + height - 1, h, r, g, b, a);
+        }
+        for (let r = row + 1; r < row + height - 1; r++) {
+            this.setChar(col, r, v, r, g, b, a);
+            this.setChar(col + width - 1, r, v, r, g, b, a);
+        }
+    }
+
+    /**
+     * Default sample welcome screen with an animated background and a centered message box.
+     */
+    welcome() {
+        this.frameFunction = this.renderWelcomeFrame.bind(this);
+        this.startTime = performance.now();
+        this.frameScheduler.start();
+    }
+
+    renderWelcomeFrame() {
+        if(!this.initialized || !this.cols || !this.rows) return;
+
+        let [startCol, startRow, boxWidth, boxHeight] = this.writeText(this.welcomeMsg, { startCol: Math.floor(this.cols / 2), startRow: Math.floor(this.rows / 2), align: 1, boxAlign: 1, maxBoxWidth: this.cols - 4, wrap: true, paddingH: 2, paddingV: 1, color: [204, 229, 255, 255] });
+        startCol -= 1;
+        startRow -= 1;
+        boxWidth += 2;
+        boxHeight += 2;
+
+        this.drawBox(startCol, startRow, boxWidth, boxHeight, 204, 229, 255, 255);
+
+        const t = (performance.now() - this.startTime) * 0.001;
+        for (let row = 0; row < this.rows; row++) {
+            for (let col = 0; col < this.cols; col++) {
+                // Leave a hole for the message box
+                if (col >= startCol && col < startCol + boxWidth && row >= startRow && row < startRow + boxHeight) {
+                    continue;
+                }
+
+                const x = col * 0.07;
+                const y = row * 0.09;
+
+                let v = 0;
+                v += Math.sin(x * 1.0 + y * 0.4 + t * 1.3);
+                v += Math.sin(x * 0.6 - y * 0.8 + t * 0.9 + 1.7);
+                v += Math.cos(x * 0.3 + y * 1.1 + t * 0.7 + 4.2) * 0.6;
+
+                v += Math.sin(t * 0.4 + col * 0.13 + row * 0.17) * 0.25;
+
+                const value = (v + 2.2) / 4.4;
+
+                const charIdx = Math.floor(value ** 1.3 * (asciiArtCharacterCodes.length - 1)); // ^1.3 = more contrast
+                const char = asciiArtCharacterCodes[charIdx];
+
+                const brightness = value * 0.7 + 0.3;
+                this.setChar(col, row, char,
+                    (0.6 + brightness * 0.4) * 255,
+                    (0.1 + brightness * 0.6) * 255,
+                    (0.5 + brightness * 0.4) * 255,
+                    128
+                );
+            }
         }
     }
 
@@ -980,21 +1128,6 @@ class AcceleratedTextGridRenderer {
             text += "\n";
         }
         return text;
-    }
-
-    /**
-     * Sets the screen text from a single string with newlines. Lines that exceed the grid width are truncated, and lines that exceed the grid height are ignored.
-     * @param {string} text 
-     */
-    setScreenText(text) {
-        const lines = text.split("\n");
-        for (let row = 0; row < this.rows; row++) {
-            const line = lines[row] || "";
-            for (let col = 0; col < this.cols; col++) {
-                const charCode = line.charCodeAt(col) || 32;
-                this.setChar(col, row, charCode);
-            }
-        }
     }
 
     destroy() {
@@ -1434,6 +1567,7 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         this.container.style.cursor = "text";
         this.container.tabIndex = 0;
         this.container.classList.add("ls-code-editor");
+        this.container.style = "position: relative";
 
         // -- Theme
         this.theme = null;
@@ -1449,6 +1583,27 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         if(!(this.state instanceof EditorState)) {
             throw new Error("State must be an instance of EditorState");
         }
+
+        this.decorationLayer = LS.Create({
+            inner: "Test",
+            className: "ls-editor-decoration-layer",
+            style: "position: absolute; top: 0; left: 0; pointer-events: none;"
+        }).addTo(this.container);
+
+        this.on("scroll", (scrollX, scrollY) => {
+            this.decorationLayer.style.transform = `translate(${-scrollX}px, ${-scrollY}px)`;
+        });
+
+        this.on("resize", (scrollX, scrollY) => {
+            this.syncDecorationLayer();
+        });
+    }
+
+    syncDecorationLayer() {
+        this.decorationLayer.style.width = `${this.cols * this.cellWidth}px`;
+        this.decorationLayer.style.height = `${this.rows * this.cellHeight}px`;
+        this.decorationLayer.style.fontSize = `${this.fontSize}px`;
+        this.decorationLayer.style.lineHeight = this.lineHeight;
     }
 
     setTheme(theme = null) {
@@ -1456,17 +1611,17 @@ class CodeEditor extends AcceleratedTextGridRenderer {
         const tempColor = new LS.Color();
 
         this.theme = {
-            default: tempColor.set(theme && theme.default || "#aaaaaa").floatPixel,
-            identifier: tempColor.set(theme && theme.identifier || "#a8bbdb").floatPixel,
-            keyword: tempColor.set(theme && theme.keyword || "#ff4488").floatPixel,
-            string: tempColor.set(theme && theme.string || "#44ff44").floatPixel,
-            number: tempColor.set(theme && theme.number || "#ff8844").floatPixel,
-            number_unit: tempColor.set(theme && (theme.number_unit || theme.number) || "#b66231").floatPixel,
-            braces: tempColor.set(theme && theme.braces || "#ababab").floatPixel,
-            operator: tempColor.set(theme && theme.operator || "#8888ff").floatPixel,
-            background: tempColor.set(theme && theme.background || "#000000").floatPixel,
-            selection: tempColor.set(theme && theme.selection || "#ffffff88").floatPixel,
-            comment: tempColor.set(theme && theme.comment || "#4b4b4b").floatPixel
+            default: tempColor.set(theme && theme.default || "#aaaaaa").pixel,
+            identifier: tempColor.set(theme && theme.identifier || "#a8bbdb").pixel,
+            keyword: tempColor.set(theme && theme.keyword || "#ff4488").pixel,
+            string: tempColor.set(theme && theme.string || "#44ff44").pixel,
+            number: tempColor.set(theme && theme.number || "#ff8844").pixel,
+            number_unit: tempColor.set(theme && (theme.number_unit || theme.number) || "#b66231").pixel,
+            braces: tempColor.set(theme && theme.braces || "#ababab").pixel,
+            operator: tempColor.set(theme && theme.operator || "#8888ff").pixel,
+            background: tempColor.set(theme && theme.background || "#000000").pixel,
+            selection: tempColor.set(theme && theme.selection || "#ffffff88").pixel,
+            comment: tempColor.set(theme && theme.comment || "#4b4b4b").pixel
         };
 
         // Map to Glitter tokens (temporary)
@@ -1492,6 +1647,7 @@ class CodeEditor extends AcceleratedTextGridRenderer {
     async init(options = {}) {
         const promise = super.init(options);
         await promise;
+        this.syncDecorationLayer();
         this.#renderScreen(this.state);
     }
 
@@ -1518,7 +1674,7 @@ class CodeEditor extends AcceleratedTextGridRenderer {
     #renderScreen(state, virtual = false) {
         if(!state || !state.lines || state !== this.state) return;
 
-        // console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
+        console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
 
         // Render visible lines
         for (let row = 0; row < this.rows; row++) {
@@ -1648,3 +1804,4 @@ window.CodeEditor = CodeEditor;
 window.EditorState = EditorState;
 window.AcceleratedTextGridRenderer = AcceleratedTextGridRenderer;
 window.MutableTextField = MutableTextField;
+window.StringView = StringView;

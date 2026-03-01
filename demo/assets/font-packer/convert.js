@@ -198,7 +198,7 @@ async function main() {
     const atlasGenPath = path.join(__dirname, "msdf-atlas-gen");
     const atlasGenArgs = [
         "--font", fontPath,
-        "--size", "32",
+        "--size", "64",
         "--glyphs", [...glyphs.keys()].join(","),
         "--format", "png",
         "--imageout", path.join(outputDir, "atlas.png"),
@@ -228,11 +228,16 @@ async function main() {
     const atlasData = JSON.parse(fs.readFileSync(path.join(outputDir, "font.json"), "utf-8"));
 
     // We now reformat the atlas data & store ligature information
+    let i = 0;
     for(const char of atlasData.glyphs) {
         const glyphInfo = glyphs.get(char.index);
         if(glyphInfo) {
             // char.char = glyphInfo.char;
             char.code = glyphInfo.code;
+
+            char.i = i++; // dense index for faster lookup
+            char.gI = char.index; // glyphId
+            delete char.index;
         }
     }
 
