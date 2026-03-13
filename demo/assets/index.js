@@ -13,7 +13,34 @@ class EditorView extends View {
             })
         });
 
-        this.editor = window.editorInstance = new CodeEditor({ init: false });
+        // this.editor = window.editorInstance = new CodeEditor({ init: false });
+        this.editor = new class TextAreaEditor {
+            constructor() {
+                this.container = document.createElement("div");
+                this.container.className = "text-area-editor";
+                this.textArea = document.createElement("textarea");
+                this.textArea.spellcheck = false;
+                this.textArea.style.width = "100%";
+                this.textArea.style.height = "100%";
+                this.container.appendChild(this.textArea);
+            }
+
+            setText(text) {
+                this.textArea.value = text;
+            }
+
+            getText() {
+                return this.textArea.value;
+            }
+
+            init() {
+                return Promise.resolve();
+            }
+
+            resize(width, height) { }
+
+            render() { }
+        };
 
         const defaultCode = `// Welcome to the Glitter Lang demo!\n// Type some code here and click "Compile" to see the output.\n// Then you can click "Run" to execute it.\n\nprint("Hello, World!");`;
         this.editor.setText(defaultCode);

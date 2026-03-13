@@ -3,6 +3,6 @@
     "id": "lstv.glitter.demo",
     "version": "1.0",
     "description": "A build task for Glitter demo site",
-    "akenoVersion": ">=1.6.6",
+    "akenoVersion": ">=1.6.8",
     "main": "index.js"
 }

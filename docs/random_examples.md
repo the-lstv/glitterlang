@@ -755,34 +755,32 @@ div.on("click", => {
 doc.body.append(div);
 ```
 
-### Glitter UI/document format (.glu)
+### Misc
 ```ts glitter
-#doc;
-import glitter:time;
+// Special variable/argument modifiers
+fn example(const x, y, local z, (readonce) w, global g) {
+    // x is a constant and cannot be modified
+    // y is mutable and can be modified
+    // z is local to this scope and cannot be accessed outside
+    // w can only be read once; after it's read, it becomes undefined and must not be used again (mainly for temporary variables)
+    // g is a global variable accessible from anywhere; calling this function modifies the global g variable. use with caution.
 
-let date;
-const name = <safe_discoverable["Glitter UI"]>;
+    // Readonce can also be assigned like
+    const (readonce) temp = 1;
+    temp; // 1
+    temp; // Error
+}
 
-<div id="my-div" class="container">
-    Hello, {name}! Today is {date}.
+// Chain functions
+// Funcitons can be chained together in a way that the return value of one is passed to the next.
+fn chainExample(x) {
+    return x + 1;
+}
 
-    time.interval(1s, => date = time.format(<-now, "YYYY-MM-DD, HH:mm:ss"));
-</div>
+fn chainExample2(x) -> chainExample(.) {
+    return x * 2;
+}
 
-/*
-This compiles into an optimized HTML & JS file, executing once and resolving reactivity, such as
-
-<script>
-window._gui = {};
-let date;
-</script>
-<div id="my-div" class="container">
-    Hello, Glitter UI! Today is <script>_gui.date=document.currentScript.after("")</script>.
-</div>
-<script>
-setInterval(() => {
-    _gui.date.data = // ...
-}, 1000); // This would be synced
-</script>
-*/
+// Returns 11; equivalent to chainExample(chainExample2(5)); NOTE that they may be inlined by the compiler (eg. the return expression may become "5 * 2 + 1")
+chainExample2(5);
 ```
