@@ -16,7 +16,7 @@ It works in Node.js and in the browser out of the box.
 Inside the `demo` folder you can find an interactive web playground.<br>
 It comes with various language tools (code editor, AST explorer, compilation viewer, etc.) and examples.
 
-**You can try it [here](https://lstv.space/tech/glitter/playground/)**
+**You can try it [here](https://glitter-demo.lstv.space/) (beta)**
 
 
 ## Compiler API
