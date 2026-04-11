@@ -14,23 +14,92 @@ class EditorView extends View {
         });
 
         // this.editor = window.editorInstance = new CodeEditor({ init: false });
-        this.editor = new class TextAreaEditor {
+        this.editor = new class CodeMirrorEditor {
             constructor() {
-                this.container = document.createElement("div");
-                this.container.className = "text-area-editor";
-                this.textArea = document.createElement("textarea");
-                this.textArea.spellcheck = false;
-                this.textArea.style.width = "100%";
-                this.textArea.style.height = "100%";
-                this.container.appendChild(this.textArea);
+                this.container = LS.Create({ style: "height: 100%", attributes: { "data-ls-state": "loading", "state": "loading" } });
+                this.temp = null;
+
+                LS.once("codemirror-loaded", ({ cmBasicSetup, cmCommands, cmAutocompletion, cmLanguage, cmJavascript, cmView, cmState }) => {
+                    const wrapCompartment = new cmState.Compartment();
+                    const doc = this.temp || "";
+
+                    this.container.removeAttribute("state");
+                    this.container.removeAttribute("data-ls-state");
+
+                    this.editor = new cmView.EditorView({
+                        parent: this.container,
+                        doc,
+
+                        extensions: [
+                            cmBasicSetup,
+
+                            // Enable... well, it's just JavaScript for now
+                            // Eventually I will make Glitter grammar & completions
+                            cmJavascript.javascript({ typescript: true }),
+
+                            // 4-space indent
+                            cmLanguage.indentUnit.of("    "), // genuinely what the fuck is this API
+
+                            // Rectangular selection using the middle mouse button (same as alt+drag)
+                            // Also to prevent that god awful middle button to paste feature (sorry it's driving me nuts)
+                            cmView.rectangularSelection({
+                                eventFilter: (event) => event.button === 1
+                            }),
+
+                            // Some VSCode-like shortcuts
+                            cmView.keymap.of([
+                                { key: "Tab", run: (view) => { return cmAutocompletion.acceptCompletion(view) || cmCommands.indentMore(view) } },
+                                { key: "Shift-Tab", run: cmCommands.indentLess },
+                                { key: "Ctrl-`", run: cmCommands.toggleComment },
+                                { key: "Ctrl-Shift-ArrowUp", run: cmCommands.addCursorAbove },
+                                { key: "Ctrl-Shift-ArrowDown", run: cmCommands.addCursorBelow },
+
+                                { key: "Mod-Shift-ArrowUp", run: cmCommands.addCursorAbove },
+                                { key: "Mod-Shift-ArrowDown", run: cmCommands.addCursorBelow },
+
+                                { key: "Ctrl-Enter", run: () => { events.quickEmit("glitter:compile"); return true; } },
+                                { key: "Ctrl-Space", run: () => { events.quickEmit("glitter:run"); return true; } },
+
+                                { key: "Alt-z", run: (view) => {
+                                    const isWrapped = view.state.facet(cmView.EditorView.lineWrapping);
+
+                                    view.dispatch({
+                                        effects: wrapCompartment.reconfigure(isWrapped ? [] : [cmView.EditorView.lineWrapping])
+                                    });
+
+                                    return true;
+                                } }
+                            ]),
+
+                            wrapCompartment.of([]),
+
+                            // To be added
+                            cmJavascript.javascriptLanguage.data.of({
+                                autocomplete: cmJavascript.scopeCompletionSource({ example: null })
+                            })
+                        ]
+                    });
+
+                });
             }
 
             setText(text) {
-                this.textArea.value = text;
+                if (this.editor) {
+                    this.editor.dispatch({
+                        changes: { from: 0, to: this.editor.state.doc.length, insert: text }
+                    });
+                } else {
+                    this.temp = text;
+                }
+                return this;
             }
 
             getText() {
-                return this.textArea.value;
+                if (this.editor) {
+                    return this.editor.state.doc.toString();
+                } else {
+                    return this.temp;
+                }
             }
 
             init() {
@@ -38,8 +107,12 @@ class EditorView extends View {
             }
 
             resize(width, height) { }
-
             render() { }
+            destroy() {
+                if (this.editor) {
+                    this.editor.destroy();
+                }
+            }
         };
 
         const defaultCode = `// Welcome to the Glitter Lang demo!\n// Type some code here and click "Compile" to see the output.\n// Then you can click "Run" to execute it.\n\nprint("Hello, World!");`;
@@ -58,16 +131,16 @@ class EditorView extends View {
             this.editor.render();
         });
 
-        this.container.append(LS.Create([
-            { tag: "ls-box", class: "row elevated", style: "position: absolute; left: 50%; transform: translateX(-50%); bottom: 20px;", inner: [
+        this.container.append(
+            LS.Create({ tag: "ls-box", class: "row elevated", style: "position: absolute; left: 50%; transform: translateX(-50%); bottom: 20px; z-index: 1000", inner: [
                 (this.compileBtn = LS.Create({ tag: "button", tooltip: "Compile the current code <kbd>Ctrl+Enter</kbd>", inner: [ { tag: "i", class: "bi-hammer" }, " Compile" ] })),
                 (this.runBtn = LS.Create({ tag: "button", tooltip: "Run the compiled code <kbd>Ctrl+Space</kbd>", inner: [ { tag: "i", class: "bi-play-fill" }, " Run" ], attributes: { disabled: "true" } }))
-            ] },
+            ] }),
 
             this.editor.container,
 
             // (this.input = LS.Create({ tag: "textarea", name: "input", style: "width: 100%; resize: vertical;", attributes: { spellcheck: "false" }, text: "var x = 10 + 10;" }))
-        ]));
+        );
 
         this.compiled = null;
 
@@ -84,6 +157,7 @@ class EditorView extends View {
         this.compileBtn.removeEventListener("click", this.handleCompile);
         this.runBtn.removeEventListener("click", this.handleRun);
         events.off("glitter:set-code", this.handleSetCode);
+        this.editor.destroy();
         super.destroy();
     }
 
@@ -523,8 +597,8 @@ const EditorViewInstance = new EditorView();
 const LogsViewInstance = new LogsView();
 const ASTViewInstance = new ASTView();
 const OutputViewInstance = new OutputView();
-// const TerminalViewInstance = new TerminalView();
-app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance);//, TerminalViewInstance);
+const TerminalViewInstance = new TerminalView();
+app.layoutManager.add(EditorViewInstance, LogsViewInstance, ASTViewInstance, OutputViewInstance, TerminalViewInstance);
 
 app.shortcutManager.map({
     "GLOBAL_COMPILE": ["ctrl+enter", "ctrl+s"],

@@ -1,0 +1,456 @@
+#editor-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+
+    background: var(--surface-0);
+    box-shadow: none;
+}
+
+#editor-header, #editor-footer {
+    flex: none;
+    height: 25px;
+    display: flex;
+}
+
+#editor-header {
+    align-items: center;
+    padding: 0 10px;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--surface-4);
+}
+
+#editor-footer {
+    background: var(--surface-n1);
+}
+
+#editor-header > div {
+    display: flex;
+    align-items: center;
+    height: 100%;
+}
+
+#editor-header > div > div {
+    height: 100%;
+    padding: 0 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#editor-header > div > div.disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+#editor-header > div > div:hover, #editor-header > div > div:focus {
+    background: var(--elevate);
+}
+
+#layout-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.row {
+    display: flex;
+    gap: 12px;
+}
+
+textarea {
+    height: calc(100% - 108px);
+    min-height: 200px;
+    font-family: var(--font);
+    font-size: 0.9rem;
+    line-height: 1.4;
+    background: var(--surface-n2);
+    border-radius: 8px;
+    padding: 12px;
+    color: #ffffff;
+    border: none;
+    outline: none;
+}
+
+.log-console, .output-console {
+    height: 100%;
+    width: 100%;
+    overflow: auto;
+    padding: 10px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    user-select: text;
+    margin: 0;
+}
+
+.ast-panel {
+    padding: 10px;
+}
+
+.editor-view, layout-item, .ls-tabs {
+    min-height: 0;
+    min-width: 0;
+}
+
+.editor-view {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+    flex: 1;
+}
+
+.tree-branch > summary {
+    cursor: pointer;
+    color: #fff;
+}
+
+.tree-leaf {
+    margin-left: 18px;
+    padding: 2px 0;
+    color: #9ea8c7;
+    font-family: "JetBrains Mono", monospace;
+}
+
+.literal-chip {
+    display: inline-flex;
+    align-items: center;
+    font-weight: 600;
+}
+
+.literal-number { color: #b58dff; }
+.literal-string { color: #7dffb0; }
+.literal-boolean { color: #ffd479; }
+.literal-nullish { color: #ff7d7d; }
+.literal-unknown { color: #89c2ff; }
+
+.log-entry {
+    display: flex;
+    gap: 8px;
+    padding: 4px 0;
+    white-space: pre-wrap;
+}
+
+.log-entry.error { color: #ff7d7d; }
+.log-entry.warn { color: #ffd479; }
+.log-entry.note { color: #7dffb0; }
+.log-entry.info { color: #89c2ff; }
+.log-entry.debug { color: #89c2ffaa; }
+
+.metrics {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #9ea8c7;
+}
+
+details.tree-branch {
+    margin-left: 12px;
+}
+
+details.tree-branch summary::marker {
+    color: var(--accent);
+}
+
+layout-item, .layout-tabs {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    outline: 1px solid var(--surface-1);
+}
+
+layout-item:last-of-type, .layout-tabs:last-of-type {
+    flex: 1;
+}
+
+.layout-row, .layout-column {
+    display: flex;
+}
+
+.layout-row {
+    flex-direction: row;
+}
+
+.layout-column {
+    flex-direction: column;
+}
+
+.layout-slot {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+}
+
+.centered-layout, .layout-slot-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    width: 100%;
+}
+
+.layout-slot-header {
+    height: 25px;
+    display: flex;
+    align-items: center;
+    background: var(--surface-n2);
+    padding: 0 10px;
+    justify-content: space-between;
+}
+
+.layout-slot-header > div {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Empty slot */
+
+.layout-slot-empty {
+    flex-direction: column;
+    color: var(--surface-8);
+}
+
+.layout-slot-empty i {
+    font-size: xx-large;
+    margin-bottom: 8px;
+}
+
+
+
+/*
+    Modern CodeMirror 6 theme.
+    Supports both light and dark mode.
+*/
+
+.editor-panel {
+    .cm-editor {
+        background: var(--background);
+        color: var(--color);
+
+        width: 100%;
+        height: 100%;
+    }
+
+    .cm-content {
+        padding-bottom: 100px;
+    }
+
+    .cm-scroller, .cm-content, .cm-editor {
+        font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+    }
+    
+    /* editor gutter */
+    .cm-gutters {
+        background: transparent;
+        color: var(--elevate-3);
+        border-right: none;
+    }
+    
+    /* line numbers */
+    .cm-lineNumbers .cm-gutterElement {
+        color: var(--elevate-2);
+    }
+
+    .cm-lineNumbers .cm-gutterElement.cm-activeLineGutter {
+        color: var(--surface-10);
+    }
+
+    .cm-activeLineGutter {
+        background: transparent;
+    }
+
+    .cm-activeLine {
+        background: transparent !important;
+    }
+
+    .cm-selectionBackground {
+        background: var(--elevate) !important;
+    }
+    
+    .cm-focused .cm-selectionBackground {
+        background: var(--elevate-1) !important;
+    }
+
+    .cm-selectionBackground:last-child {
+        border-radius: 0 0 var(--border-radius-small) 0;
+    }
+
+    .cm-selectionBackground:first-child {
+        border-radius: var(--border-radius-small) 0 0 0;
+    }
+
+    .cm-selectionBackground:only-child {
+        border-radius: var(--border-radius-small) ;
+    }
+    
+    .cm-selectionMatch {
+        background: var(--elevate) !important;
+    }
+    
+    /* cursor */
+    .cm-cursor {
+        border-left: 2px solid color-mix(in oklab, var(--color) 85%, white);
+    }
+    
+    /* text styling */
+    .cm-content {
+        caret-color: var(--color);
+    }
+    
+    /* matching brackets */
+    .cm-matchingBracket {
+        background: var(--surface-2);
+        outline: 1px solid var(--surface-10);
+    }
+    
+    /* completion active item */
+    .cm-tooltip-autocomplete li[aria-selected] {
+        background: var(--surface-10);
+    }
+    
+    /* search highlight */
+    .cm-searchMatch {
+        background: color-mix(in oklab, var(--surface-10) 70%, #ffd54a 30%);
+        outline: 1px solid color-mix(in oklab, #ffd54a 60%, transparent);
+    }
+    
+    /* panels (search, lint, etc.) */
+    .cm-panels {
+        background: var(--surface-n3);
+        border-top: 1px solid var(--ui-border);
+    }
+    
+    /* scrollbar */
+    .cm-scroller {
+        scrollbar-color: var(--surface-10) transparent;
+    }
+    
+    /* folded code */
+    .cm-foldPlaceholder {
+        background: var(--surface-n3);
+        border: 1px solid var(--ui-border);
+        color: color-mix(in oklab, var(--color) 60%, transparent);
+        border-radius: 6px;
+        padding: 0 6px;
+    }
+    
+    /* tooltips / autocomplete */
+    .cm-tooltip {
+        background: var(--surface-1);
+        border: 1px solid var(--surface-2);
+        color: var(--color);
+        box-shadow: 0 8px 24px color-mix(in oklab, black 30%, transparent);
+        border-radius: var(--border-radius);
+        overflow: hidden;
+        padding: 4px;
+    }
+
+    .cm-tooltip-autocomplete ul li {
+        border-radius: 4px;
+    }
+
+    .cm-tooltip-autocomplete ul li[aria-selected] {
+        background: var(--surface-3);
+        color: unset;
+    }
+
+
+    /* Icons */
+    .cm-completionIcon {
+        font-family: Phosphor !important;
+        speak: never;
+        font-style: normal;
+        font-weight: 400;
+        font-variant: normal;
+        text-transform: none;
+        line-height: 1;
+        letter-spacing: 0;
+        -webkit-font-feature-settings: "liga";
+        -moz-font-feature-settings: "liga=1";
+        -moz-font-feature-settings: "liga";
+        -ms-font-feature-settings: "liga" 1;
+        font-feature-settings: "liga";
+        -webkit-font-variant-ligatures: discretionary-ligatures;
+        font-variant-ligatures: discretionary-ligatures;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .ͼ1 .cm-completionIcon-class:after {content: '';}
+    .ͼ1 .cm-completionIcon-interface:after {content: '';}
+    .ͼ1 .cm-completionIcon-variable:after {content: '𝑥';}
+    .ͼ1 .cm-completionIcon-constant:after {content: '𝐶';}
+    .ͼ1 .cm-completionIcon-type:after {content: '';}
+    .ͼ1 .cm-completionIcon-enum:after {content: '';}
+    .ͼ1 .cm-completionIcon-property:after {content: '';}
+    .ͼ1 .cm-completionIcon-keyword:after {content: '';}
+    .ͼ1 .cm-completionIcon-namespace:after {content: '';}
+    .ͼ1 .cm-completionIcon-function:after {content: '';}
+    .ͼ1 .cm-completionIcon-text:after {content: ''; font-size: unset; vertical-align: unset }
+
+
+    /* Highlighting */
+
+    .ͼb {
+        color: #e777f7;
+    }
+
+    .ͼl {
+        color: #ffd409;
+    }
+
+    .ͼe {
+        color: #9ece6a;
+    }
+
+    .ͼf {
+        color: #f7768e;
+    }
+
+    .ͼd {
+        color: #7dcfff;
+    }
+
+    .ͼj {
+        color: #09d6ff;
+    }
+
+    .ͼg {
+        color: var(--surface-10);
+    }
+
+    .ͼm {
+        color: var(--surface-6);
+    }
+}
+
+[ls-theme="light"] .editor-panel {
+
+    .ͼb {
+        color: #c02bd5;
+    }
+
+    .ͼl {
+        color: #e35d00;
+    }
+
+    .ͼe {
+        color: #548359;
+    }
+
+    .ͼf {
+        color: #d55c73;
+    }
+
+    .ͼd {
+        color: #519fcc;
+    }
+
+    .ͼj {
+        color: #1696af;
+    }
+}

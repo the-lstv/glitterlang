@@ -441,6 +441,16 @@ class AcceleratedTextGridRenderer extends LS.EventEmitter {
     }
 
     /**
+     * Clear the screen
+    */
+    clear() {
+        if (!this.vertexData) return;
+        this.gridBuffer.fill(0);
+        this.vertexData.fill(0);
+        this.gridDirty = true;
+    }
+
+    /**
      * Sets a character and color at the specified column and row in the grid if the position is valid.
      * @param {number} col - Column of the cell to update
      * @param {number} row - Row of the cell to update
@@ -1673,8 +1683,6 @@ class CodeEditor extends AcceleratedTextGridRenderer {
      */
     #renderScreen(state, virtual = false) {
         if(!state || !state.lines || state !== this.state) return;
-
-        console.log("Rendering", Math.min(this.virtualRow + this.rows, state.lineCount), "to", Math.min(this.virtualRow + this.rows, state.lineCount) - this.virtualRow, "lines out of ", state.lineCount);
 
         // Render visible lines
         for (let row = 0; row < this.rows; row++) {
