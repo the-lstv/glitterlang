@@ -20,69 +20,69 @@
     <!-- The following huge import attrocity is the editor (CodeMirror until I complete my own editor) -->
     <!-- If you are wondering why the weird syntax, it's because Akeno doesn't understand type="module" yet.. -->
     <script type="importmap">
-        {"imports": {
-        "@codemirror/commands": "https://unpkg.com/@codemirror/commands@6.10.3/dist/index.js",
-        "@codemirror/autocomplete": "https://unpkg.com/@codemirror/autocomplete@6.20.1/dist/index.js",
-        "@codemirror/language": "https://unpkg.com/@codemirror/language@6.12.3/dist/index.js",
-        "@codemirror/lang-javascript": "https://unpkg.com/@codemirror/lang-javascript@6.2.5/dist/index.js",
-        "@codemirror/view": "https://unpkg.com/@codemirror/view@6.41.0/dist/index.js",
-        "@codemirror/state": "https://unpkg.com/@codemirror/state@6.6.0/dist/index.js",
-        "@codemirror/search": "https://unpkg.com/@codemirror/search@6.6.0/dist/index.js",
-        "@codemirror/lint": "https://unpkg.com/@codemirror/lint@6.9.5/dist/index.js",
-        "@lezer/common": "https://unpkg.com/@lezer/common@1.5.2/dist/index.js",
-        "@lezer/highlight": "https://unpkg.com/@lezer/highlight@1.2.3/dist/index.js",
-        "@lezer/javascript": "https://unpkg.com/@lezer/javascript@1.5.4/dist/index.js",
-        "@lezer/lr": "https://unpkg.com/@lezer/lr@1.4.8/dist/index.js",
-        "@marijn/find-cluster-break": "https://unpkg.com/@marijn/find-cluster-break@1.0.2/src/index.js",
-        "style-mod": "https://unpkg.com/style-mod@4.1.3/src/style-mod.js",
-        "crelt": "https://unpkg.com/crelt@1.0.6/index.js",
-        "w3c-keyname": "https://unpkg.com/w3c-keyname@2.2.8/index.js"
-        }}
-    </script> <script>
-        document.head.appendChild(Object.assign(document.createElement("script"), {
-            type: "module", textContent: `
-            import * as cmCommands from "@codemirror/commands"
-            import * as cmAutocompletion from "@codemirror/autocomplete"
-            import * as cmLanguage from "@codemirror/language"
-            import * as cmJavascript from "@codemirror/lang-javascript"
-            import * as cmView from "@codemirror/view"
-            import * as cmState from '@codemirror/state';
-            import * as cmSearch from '@codemirror/search';
-            import * as cmLint from '@codemirror/lint';
+        {
+            "imports": {
+                "@codemirror/commands": "https://unpkg.com/@codemirror/commands@6.10.3/dist/index.js",
+                "@codemirror/autocomplete": "https://unpkg.com/@codemirror/autocomplete@6.20.1/dist/index.js",
+                "@codemirror/language": "https://unpkg.com/@codemirror/language@6.12.3/dist/index.js",
+                "@codemirror/lang-javascript": "https://unpkg.com/@codemirror/lang-javascript@6.2.5/dist/index.js",
+                "@codemirror/view": "https://unpkg.com/@codemirror/view@6.41.0/dist/index.js",
+                "@codemirror/state": "https://unpkg.com/@codemirror/state@6.6.0/dist/index.js",
+                "@codemirror/search": "https://unpkg.com/@codemirror/search@6.6.0/dist/index.js",
+                "@codemirror/lint": "https://unpkg.com/@codemirror/lint@6.9.5/dist/index.js",
+                "@lezer/common": "https://unpkg.com/@lezer/common@1.5.2/dist/index.js",
+                "@lezer/highlight": "https://unpkg.com/@lezer/highlight@1.2.3/dist/index.js",
+                "@lezer/javascript": "https://unpkg.com/@lezer/javascript@1.5.4/dist/index.js",
+                "@lezer/lr": "https://unpkg.com/@lezer/lr@1.4.8/dist/index.js",
+                "@marijn/find-cluster-break": "https://unpkg.com/@marijn/find-cluster-break@1.0.2/src/index.js",
+                "style-mod": "https://unpkg.com/style-mod@4.1.3/src/style-mod.js",
+                "crelt": "https://unpkg.com/crelt@1.0.6/index.js",
+                "w3c-keyname": "https://unpkg.com/w3c-keyname@2.2.8/index.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as cmCommands from "@codemirror/commands"
+        import * as cmAutocompletion from "@codemirror/autocomplete"
+        import * as cmLanguage from "@codemirror/language"
+        import * as cmJavascript from "@codemirror/lang-javascript"
+        import * as cmView from "@codemirror/view"
+        import * as cmState from '@codemirror/state';
+        import * as cmSearch from '@codemirror/search';
+        import * as cmLint from '@codemirror/lint';
 
-            // Taken from the codemirror example setup thing
-            const basicSetup = (() => [
-                cmView.lineNumbers(),
-                cmView.highlightActiveLineGutter(),
-                cmView.highlightSpecialChars(),
-                cmCommands.history(),
-                cmLanguage.foldGutter(),
-                cmView.drawSelection(),
-                cmView.dropCursor(),
-                cmState.EditorState.allowMultipleSelections.of(true),
-                cmLanguage.indentOnInput(),
-                cmLanguage.syntaxHighlighting(cmLanguage.defaultHighlightStyle, { fallback: true }),
-                cmLanguage.bracketMatching(),
-                cmAutocompletion.closeBrackets(),
-                cmAutocompletion.autocompletion(),
-                cmView.rectangularSelection(),
-                cmView.crosshairCursor(),
-                cmView.highlightActiveLine(),
-                cmSearch.highlightSelectionMatches(),
-                cmView.keymap.of([
-                    ...cmAutocompletion.closeBracketsKeymap,
-                    ...cmCommands.defaultKeymap,
-                    ...cmSearch.searchKeymap,
-                    ...cmCommands.historyKeymap,
-                    ...cmLanguage.foldKeymap,
-                    ...cmAutocompletion.completionKeymap,
-                    ...cmLint.lintKeymap
-                ])
-            ])();
+        // Taken from the codemirror example setup thing
+        const basicSetup = [
+            cmView.lineNumbers(),
+            cmView.highlightActiveLineGutter(),
+            cmView.highlightSpecialChars(),
+            cmCommands.history(),
+            cmLanguage.foldGutter(),
+            cmView.drawSelection(),
+            cmView.dropCursor(),
+            cmState.EditorState.allowMultipleSelections.of(true),
+            cmLanguage.indentOnInput(),
+            cmLanguage.syntaxHighlighting(cmLanguage.defaultHighlightStyle, { fallback: true }),
+            cmLanguage.bracketMatching(),
+            cmAutocompletion.closeBrackets(),
+            cmAutocompletion.autocompletion(),
+            cmView.rectangularSelection(),
+            cmView.crosshairCursor(),
+            cmView.highlightActiveLine(),
+            cmSearch.highlightSelectionMatches(),
+            cmView.keymap.of([
+                ...cmAutocompletion.closeBracketsKeymap,
+                ...cmCommands.defaultKeymap,
+                ...cmSearch.searchKeymap,
+                ...cmCommands.historyKeymap,
+                ...cmLanguage.foldKeymap,
+                ...cmAutocompletion.completionKeymap,
+                ...cmLint.lintKeymap
+            ])
+        ];
 
-            // Finally, export the modules into something useable like a normal person
-            (LS.completed || LS._events.completed.bind(LS._events))("codemirror-loaded", [Object.assign(window, { cmBasicSetup: basicSetup, cmState, cmCommands, cmAutocompletion, cmLanguage, cmJavascript, cmView })]);`
-        }));
+        // Finally, export the modules into something useable
+        (LS.completed || LS._events.completed.bind(LS._events))("codemirror-loaded", [Object.assign(window, { cmBasicSetup: basicSetup, cmState, cmCommands, cmAutocompletion, cmLanguage, cmJavascript, cmView })]);
     </script>
 
     <!-- Manifest -->
