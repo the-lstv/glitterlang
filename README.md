@@ -13,6 +13,7 @@ All the code is in `glitter.js`, and there are 0 dependencies (you can just use 
 It works in Node.js and in the browser out of the box.
 
 ## Playground
+<img width="1759" height="1023" alt="Screenshot from 2026-04-12 01-33-51" src="https://github.com/user-attachments/assets/027166b7-2381-4a7b-80e3-0a7721b04aa4" />
 Inside the `demo` folder you can find an interactive web playground.<br>
 It comes with various language tools (code editor, AST explorer, compilation viewer, etc.) and examples.
 
