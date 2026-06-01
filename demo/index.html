@@ -1,5 +1,5 @@
 <head>
-    @use (ls[flat, resize, tooltips, toast, modal, animation, tabs, menu, ShortcutManager, color], bootstrap-icons, google-fonts["JetBrains Mono"]);
+    @use (ls[flat, resize, tooltips, toast, modal, multipane, animation, tabs, menu, ShortcutManager, color], bootstrap-icons, google-fonts["JetBrains Mono"]);
 
     <!-- Glitter.js -->
     @use ("/~/glitter.js");
@@ -7,8 +7,8 @@
     <!-- Styles -->
     @use ("./assets/css/index.css");
 
-    <!-- Layout engine -->
-    @use ("./assets/layout.js");
+    <!-- Layout engine (NOW USING LS.Multipane) -->
+    <!-- @use ("./assets/layout.js"); -->
 
     <!-- Main -->
     @use ("./assets/editor.js") { defer }
@@ -81,7 +81,7 @@
             ])();
 
             // Finally, export the modules into something useable like a normal person
-            (LS.completed || LS._events.completed.bind(LS._events))("codemirror-loaded", [Object.assign(window, { cmBasicSetup: basicSetup, cmState, cmCommands, cmAutocompletion, cmLanguage, cmJavascript, cmView })]);`
+            LS.completed("codemirror-loaded", [Object.assign(window, { cmBasicSetup: basicSetup, cmState, cmCommands, cmAutocompletion, cmLanguage, cmJavascript, cmView })]);`
         }));
     </script>
 

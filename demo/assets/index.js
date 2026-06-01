@@ -3,7 +3,171 @@ const events = new LS.EventEmitter();
 window.b = s => new TextEncoder().encode(s); // b`string`
 window.s = b => new TextDecoder().decode(b);
 
-class EditorView extends View {
+// Layout presets
+LS.Multipane.PRESETS = {
+    /**
+     * |   | | |
+     * |   |---|
+     * |   |   |
+     */
+    'default': {
+        title: "Default",
+        direction: 'row',
+        inner: [
+            {
+                inner: {
+                    direction: 'column',
+                    inner: [
+                        { type: 'slot', view: 'EditorView', resize: { height: "70%" } },
+                        { type: 'slot', view: 'TerminalView' }
+                    ]
+                }
+            },
+            {
+                inner: {
+                    direction: 'column',
+                    inner: [{ direction: "row", inner: [{ type: 'slot', view: 'OutputView' }, { type: 'slot', view: 'ASTView' }] }, { type: 'slot', view: 'LogsView' }]
+                }
+            }
+        ]
+    },
+
+    /**
+    * |       |
+    * |-------|
+    * |       |
+    */
+    'editor-focused': {
+        title: "Editor Focused",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'EditorView', resize: { height: "70%" } },
+            {
+                direction: 'row',
+                inner: [
+                    { type: 'slot', view: 'TerminalView', resize: { width: "50%" } },
+                    { type: 'slot', view: 'LogsView' }
+                ]
+            }
+        ]
+    },
+
+    /**
+    * |   |   |
+    * |   |   |
+    * |   |   |
+    */
+    'output-focused': {
+        title: "Output Focused",
+        direction: 'row',
+        inner: [
+            { type: 'slot', view: 'EditorView', resize: { width: "40%" } },
+            {
+                direction: 'column',
+                inner: [
+                    { type: 'slot', view: 'ASTView', resize: { height: "60%" } },
+                    { type: 'slot', view: 'LogsView' }
+                ]
+            }
+        ]
+    },
+
+    /**
+    * |       |
+    * |-------|
+    * |       |
+    * |-------|
+    * |       |
+    */
+    'vertical-compiler': {
+        title: "Vertical",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'EditorView', resize: { height: "50%" } },
+            { type: 'slot', view: 'TerminalView', resize: { height: "25%" } },
+            { type: 'slot', view: 'LogsView' }
+        ]
+    },
+
+    /**
+    * |     |  |
+    * |-----|--|
+    * |     |  |
+    */
+    'ast-sidebar': {
+        title: "AST Sidebar",
+        direction: 'row',
+        inner: [
+            {
+                direction: 'column',
+                inner: [
+                    { type: 'slot', view: 'EditorView', resize: { height: "60%" } },
+                    { type: 'slot', view: 'LogsView' }
+                ]
+            },
+            { type: 'slot', view: 'ASTView', resize: { width: 300 } }
+        ]
+    },
+
+    /**
+    * | |   | |
+    * | |   | |
+    * | |   | |
+    */
+    'three-column-compiler': {
+        title: "Three Columns",
+        direction: 'row',
+        inner: [
+            { type: 'slot', view: 'EditorView', resize: { width: "35%" } },
+            { type: 'slot', view: 'LogsView', resize: { width: "35%" } },
+            { type: 'slot', view: 'ASTView' }
+        ]
+    },
+
+    /**
+    * |   |   |
+    * |-------|
+    * |   |   |
+    * |-------|
+    * |   |   |
+    */
+    'four-panel': {
+        title: "Four Panel",
+        direction: 'column',
+        inner: [
+            { inner: [{ type: 'slot', view: 'EditorView', resize: { width: "50%" } }, { type: 'slot', view: 'TerminalView' }], resize: { height: "50%" } },
+            { inner: [{ type: 'slot', view: 'ASTView', resize: { width: "50%" } }, { type: 'slot', view: 'LogsView' }], resize: { height: "50%" } }
+        ]
+    },
+
+    /**
+    * |       |
+    * |       |
+    * |       |
+    */
+    'editor-only': {
+        title: "Editor only",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'EditorView' }
+        ]
+    },
+
+    /**
+    * |       |
+    * |       |
+    * |       |
+    */
+    'terminal-only': {
+        title: "Terminal only",
+        direction: 'column',
+        inner: [
+            { type: 'slot', view: 'TerminalView' }
+        ]
+    },
+};
+
+class EditorView extends LS.Multipane.View {
     constructor() {
         super({
             name: "EditorView",
@@ -232,7 +396,7 @@ class EditorView extends View {
     }
 }
 
-class LogsView extends View {
+class LogsView extends LS.Multipane.View {
     constructor() {
         super({
             name: "LogsView",
@@ -282,7 +446,7 @@ class LogsView extends View {
     }
 }
 
-class ASTView extends View {
+class ASTView extends LS.Multipane.View {
     constructor() {
         let astTree;
         super({
@@ -431,7 +595,7 @@ class ASTView extends View {
     }
 }
 
-class OutputView extends View {
+class OutputView extends LS.Multipane.View {
     constructor() {
         super({
             name: "OutputView",
@@ -480,7 +644,7 @@ class OutputView extends View {
     }
 }
 
-class TerminalView extends View {
+class TerminalView extends LS.Multipane.View {
     constructor() {
         super({
             name: "TerminalView",
@@ -512,7 +676,7 @@ const layoutContainer = document.querySelector("#layout-container");
 const headerContainer = document.querySelector("#editor-header");
 
 const app = {
-    layoutManager: new LayoutManager(layoutContainer, {
+    layoutManager: new LS.Multipane(layoutContainer, {
         layout: localStorage.getItem("default-layout") || "default",
     }),
 
@@ -607,3 +771,5 @@ app.shortcutManager.map({
 app.shortcutManager.assign("GLOBAL_COMPILE", () => {
     EditorViewInstance.compile();
 });
+
+globalThis.app = app; // For debugging purposes
